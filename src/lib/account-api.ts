@@ -69,9 +69,12 @@ function request<T>(path: string, options: RequestInit = {}, credential?: string
     const purpose = JSON.parse(String(options.body || '{}')).purpose
     if (['register', 'bind', 'reset'].includes(purpose)) action = `code_${purpose}`
   }
-  return action ? measureGrowthRequest(action, () => rawRequest<T>(path, options, credential)) : rawRequest<T>(path, options, credential)
+  if (!action) return rawRequest<T>(path, options, credential)
+  const bytes = crypto.getRandomValues(new Uint8Array(16))
+  const trace = { request_id: Array.from(bytes, b => b.toString(16).padStart(2, '0')).join(''), stage: 'sending' }
+  return measureGrowthRequest(action, () => rawRequest<T>(path, options, credential, trace), undefined, trace)
 }
-async function rawRequest<T>(path: string, options: RequestInit = {}, credential?: string) {
+async function rawRequest<T>(path: string, options: RequestInit = {}, credential?: string, trace?: { request_id: string; stage: string }) {
   if (credential !== undefined) assertExportIdentity({ userId: null, credential })
   const sessionToken = credential ?? token()
   try {
@@ -83,14 +86,18 @@ async function rawRequest<T>(path: string, options: RequestInit = {}, credential
           ...(options.body ? { 'content-type': 'application/json' } : {}),
           ...(sessionToken ? { authorization: `Bearer ${sessionToken}` } : {}),
           ...options.headers,
+          ...(trace ? { 'x-client-request-id': trace.request_id } : {}),
         },
       })
+      if (trace) trace.stage = 'headers_received'
       const payload = await response.json().catch(error => {
         if (signal.aborted) throw error
+        if (response.ok) throw new Error('服务响应不完整，请重试')
         return {}
       }) as T & {
         error?: { code?: string; message?: string }
       }
+      if (trace) trace.stage = 'response_received'
       if (!response.ok) {
         throw new AccountApiError(
           response.status,
@@ -101,8 +108,9 @@ async function rawRequest<T>(path: string, options: RequestInit = {}, credential
       return payload
     }, 20000, options.signal)
   } catch (error) {
-    if (error instanceof TypeError) throw new TypeError('暂时无法连接服务，请检查网络后重试。')
-    throw error
+    const failure = error instanceof TypeError ? new TypeError('暂时无法连接服务，请检查网络后重试。') : error
+    if (trace && failure instanceof Error) failure.message += `（排查编号：${trace.request_id}）`
+    throw failure
   }
 }
 
