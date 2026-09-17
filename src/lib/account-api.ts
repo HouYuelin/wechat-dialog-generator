@@ -168,13 +168,14 @@ const post = <T>(path: string, body: object) => request<T>(path, { method: 'POST
 export type PaymentProduct = { id: string; amount_fen: number; credits: number; subject: string; kind?: 'credits' | 'membership'; duration_days?: number; regular_amount_fen?: number; purchasable?: boolean }
 export type PaymentCampaign = { active: boolean; starts_at: string; ends_at: string; server_now: string }
 export type PaymentState = 'pending' | 'paid' | 'closed' | 'refunding' | 'refunded'
-export type PaymentOrder = { id: string; product_id: string; amount_fen: number; credits: number; state: PaymentState; created_at: string; paid_at: string | null; kind?: 'credits' | 'membership'; duration_days?: number; subject?: string }
+export type PaymentTiming = { expires_at?: string; checkout_expired?: boolean; server_now?: string }
+export type PaymentOrder = PaymentTiming & { id: string; product_id: string; amount_fen: number; credits: number; state: PaymentState; created_at: string; paid_at: string | null; kind?: 'credits' | 'membership'; duration_days?: number; subject?: string }
 export const getPaymentProducts = () => request<{ available: boolean; products: PaymentProduct[]; campaign?: PaymentCampaign | null }>('/payments/products')
 const paymentPost = <T>(path: string, body: object, identity?: ExportIdentity) => request<T>(path, { method: 'POST', body: JSON.stringify(body) }, identity?.credential)
 export const getPaymentOrders = (identity?: ExportIdentity) => request<{ orders: PaymentOrder[] }>('/payments/orders', {}, identity?.credential)
-export const createPaymentOrder = (product_id: string, request_id: string, expected_amount_fen?: number, identity?: ExportIdentity) => paymentPost<{ order_id: string; state: PaymentState; checkout_url?: string }>('/payments/orders', { product_id, request_id, ...(expected_amount_fen === undefined ? {} : { expected_amount_fen }) }, identity)
-export const refreshPaymentOrder = (order_id: string, identity?: ExportIdentity) => paymentPost<{ order_id: string; state: PaymentState; quota: ExportQuota }>('/payments/refresh', { order_id }, identity)
-export const resumePaymentOrder = (order_id: string, identity?: ExportIdentity) => paymentPost<{ order_id: string; state: PaymentState; checkout_url?: string }>('/payments/checkout', { order_id }, identity)
+export const createPaymentOrder = (product_id: string, request_id: string, expected_amount_fen?: number, identity?: ExportIdentity) => paymentPost<PaymentTiming & { order_id: string; state: PaymentState; checkout_url?: string }>('/payments/orders', { product_id, request_id, ...(expected_amount_fen === undefined ? {} : { expected_amount_fen }) }, identity)
+export const refreshPaymentOrder = (order_id: string, identity?: ExportIdentity) => paymentPost<PaymentTiming & { order_id: string; state: PaymentState; quota: ExportQuota }>('/payments/refresh', { order_id }, identity)
+export const resumePaymentOrder = (order_id: string, identity?: ExportIdentity) => paymentPost<PaymentTiming & { order_id: string; state: PaymentState; checkout_url?: string }>('/payments/checkout', { order_id }, identity)
 export const requestEmailCode = (email: string, purpose: 'register' | 'bind' | 'reset') => post<{ challenge_id: string; retry_after: number; message: string }>('/auth/email-code', { email, purpose })
 export const verifyAccountEmail = (email: string, challenge_id: string, code: string) => post<AccountSession & { granted: number }>('/auth/email/verify', { email, challenge_id, code })
 export const resetAccountPassword = (email: string, password: string, challenge_id: string, code: string) => post<{ ok: boolean }>('/auth/password/reset', { email, password, challenge_id, code })
