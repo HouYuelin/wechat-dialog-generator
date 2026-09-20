@@ -1,10 +1,14 @@
 import type { ChatMessage, ChatUser, PhoneSettings } from '@/types'
+import { normalizeMediaLibrary, type MediaAsset } from './media-library'
 
 const databaseName = 'wechat-dialog-generator'
-const databaseVersion = 3
+// 素材库（media-assets）是版本 4 新加的 store；升版本号时记得在这里把新 store 一并建出来，
+// 否则老用户升级上来会打开一个缺 store 的库，读素材直接抛错。
+const databaseVersion = 4
 const projectStore = 'projects'
 const momentStore = 'moment-projects'
 const sceneStore = 'scene-projects'
+const mediaAssetStore = 'media-assets'
 
 export const activeProjectStorageKey = 'wechat-dialog-generator:active-project'
 
@@ -77,6 +81,10 @@ function openDatabase() {
       if (!database.objectStoreNames.contains(sceneStore)) {
         database.createObjectStore(sceneStore, { keyPath: 'id' })
       }
+      if (!database.objectStoreNames.contains(mediaAssetStore)) {
+        const store = database.createObjectStore(mediaAssetStore, { keyPath: 'id' })
+        store.createIndex('kind', 'kind')
+      }
     }
     request.onsuccess = () => resolve(request.result)
     request.onerror = () => reject(request.error ?? new Error('Unable to open IndexedDB'))
@@ -99,6 +107,31 @@ export async function loadWechatScene(kind: WechatSceneKind) {
 export async function saveWechatScene(project: WechatSceneProject) {
   await withNamedStore(sceneStore, 'readwrite', store => store.put(project))
   return project
+}
+
+/**
+ * 读出素材库。存进去的每条都过了 normalizeMediaAsset 才落库，但浏览器里的老数据、
+ * 手工改过的记录仍然可能不干净，所以读的时候再规范一遍并按图去重。
+ */
+export async function loadMediaAssets() {
+  const stored = await withNamedStore<unknown[]>(mediaAssetStore, 'readonly', store => store.getAll())
+  return normalizeMediaLibrary(stored)
+}
+
+/**
+ * 增量写入：只 put 这一批新素材，不重写整个库。恢复一次几十张、每张几百 KB 的库如果每次
+ * 全量重写，光是序列化就够卡一下。`store.count()` 只是用来等事务提交完成的收尾请求。
+ */
+export async function putMediaAssets(assets: MediaAsset[]) {
+  if (!assets.length) return
+  await withNamedStore(mediaAssetStore, 'readwrite', store => {
+    for (const asset of assets) store.put(asset)
+    return store.count()
+  })
+}
+
+export async function deleteMediaAssetRecord(id: string) {
+  await withNamedStore(mediaAssetStore, 'readwrite', store => store.delete(id))
 }
 
 async function withNamedStore<T>(

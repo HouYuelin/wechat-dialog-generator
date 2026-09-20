@@ -1,4 +1,5 @@
 import { parseChatRecord } from './parser'
+import { carryOverAvatars, carryOverSelfId } from './user-avatars'
 import type { ChatUser, ChatMessage, PhoneSettings } from '../types'
 export type CaptureMode = 'standard' | 'long'
 export type ChatContent = { title: string; body: string }
@@ -68,9 +69,8 @@ export function validateChat(card: ChatContent, index = 1) {
 export function chatSnapshot(content: ChatContent, settings: PhoneSettings, avatars: ChatUser[], originalSelf: number | null): ChatSnapshot {
   validateChat(content)
   const parsed = parseChatRecord(content.body)
-  const users = parsed.users.map(user => ({ ...user, avatar: avatars.find(a => a.name === user.name)?.avatar || (user.name === '我' ? avatars.find(a => a.id === originalSelf)?.avatar : null) || null }))
-  const selfName = avatars.find(a => a.id === originalSelf)?.name
-  return { ...parsed, users, selfId: users.find(u => u.name === selfName)?.id ?? users[0]?.id ?? null, settings: { ...settings, contactName: content.title } }
+  const users = carryOverAvatars(parsed.users, avatars, originalSelf)
+  return { ...parsed, users, selfId: carryOverSelfId(users, avatars, originalSelf), settings: { ...settings, contactName: content.title } }
 }
 export function cardFilename(index: number, title: string) {
   // Filesystem names must exclude control characters as well as path separators.

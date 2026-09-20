@@ -29,6 +29,7 @@ const snapshot: ChatProjectSnapshot = {
     otherBubbleColor: '#ffffff',
     backgroundColor: '#ededed',
     backgroundImage: 'data:image/png;base64,private-background',
+    imageMax: 700,
   },
   selfId: 1,
 }
@@ -45,6 +46,8 @@ test('round trips a same-template URL without uploaded private media', async () 
   assert.equal(restored.settings.contactName, '小林')
   assert.equal(restored.settings.backgroundColor, '#ededed')
   assert.equal(restored.settings.backgroundImage, null)
+  // 图片大小是纯数值设置，不涉及本地媒体，所以要跟着模板传过去。
+  assert.equal(restored.settings.imageMax, 700)
 })
 
 test('rejects malformed shared snapshots', () => {

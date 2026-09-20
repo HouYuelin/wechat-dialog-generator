@@ -1,6 +1,8 @@
-import { useRef, useEffect } from 'react';
+import { useRef, useEffect, type CSSProperties } from 'react';
 import type { ChatUser, ChatMessage, PhoneSettings } from '@/types';
 import { getDefaultAvatar } from '@/lib/parser';
+import { defaultScreenSize, designHeightFor, type ScreenSize } from '@/lib/phone-size';
+import { normalizeImageMax } from '@/lib/image-size';
 import { WechatPhoneHeader } from '@/components/WechatPhoneHeader';
 import './PhonePreview.css';
 
@@ -11,6 +13,15 @@ interface PhonePreviewProps {
   selfId: number | null;
   phoneRef?: React.RefObject<HTMLDivElement | null>;
   onUpdateMessage?: (msgId: number, content: string) => void;
+  /**
+   * 点图片消息气泡时改走素材库：传了就用它（素材库里选一张，或从弹窗里现传）。
+   * 离屏渲染（视频帧、批量图）不传，行为完全不变。
+   */
+  onPickSticker?: (msgId: number) => void;
+  /** 直接上传一张新图时的处理，交给外层读文件并入素材库；不传则自己读。 */
+  onUploadImage?: (msgId: number, file: File) => Promise<string | null>;
+  /** 导出分辨率。不改内部坐标系的宽度，只按比例决定它有多高。 */
+  screen?: ScreenSize;
 }
 
 function escHtml(str: string): string {
@@ -29,7 +40,7 @@ function TimeNotice({ content }: { content: string }) {
   );
 }
 
-function ChatBubble({ msg, user, userIndex, isSelf, isGroup, selfColor, otherColor, onUpdateMessage }: {
+function ChatBubble({ msg, user, userIndex, isSelf, isGroup, selfColor, otherColor, onUpdateMessage, onPickSticker, onUploadImage }: {
   msg: ChatMessage;
   user: ChatUser;
   userIndex: number;
@@ -38,20 +49,32 @@ function ChatBubble({ msg, user, userIndex, isSelf, isGroup, selfColor, otherCol
   selfColor: string;
   otherColor: string;
   onUpdateMessage?: (msgId: number, content: string) => void;
+  onPickSticker?: (msgId: number) => void;
+  onUploadImage?: (msgId: number, file: File) => Promise<string | null>;
 }) {
   const avatarSrc = user.avatar || getDefaultAvatar(userIndex);
   const bubbleColor = isSelf ? selfColor : otherColor;
   const imgInputRef = useRef<HTMLInputElement>(null);
 
+  const applyImage = (content: string) => onUpdateMessage?.(msg.id, content);
+
   const handleImageUpload = (e: React.ChangeEvent<HTMLInputElement>) => {
     const file = e.target.files?.[0];
-    if (!file || !onUpdateMessage) return;
-    const reader = new FileReader();
-    reader.onload = (ev) => {
-      onUpdateMessage(msg.id, ev.target?.result as string);
-    };
-    reader.readAsDataURL(file);
     e.target.value = '';
+    if (!file || !onUpdateMessage) return;
+    // 外层能处理（顺带存进素材库）就交给外层，处理不了再自己读。
+    if (onUploadImage) {
+      void onUploadImage(msg.id, file).then(url => { if (url) applyImage(url); });
+      return;
+    }
+    const reader = new FileReader();
+    reader.onload = (ev) => applyImage(ev.target?.result as string);
+    reader.readAsDataURL(file);
+  };
+
+  const handleImageClick = () => {
+    if (onPickSticker) onPickSticker(msg.id);
+    else imgInputRef.current?.click();
   };
 
   const renderContent = () => {
@@ -66,13 +89,13 @@ function ChatBubble({ msg, user, userIndex, isSelf, isGroup, selfColor, otherCol
       case 'image': {
         const hasImage = msg.content && !msg.content.includes('placeholder');
         return (
-          <div className="wc-bubble wc-bubble-image" onClick={() => imgInputRef.current?.click()} style={{ cursor: 'pointer' }}>
+          <div className="wc-bubble wc-bubble-image" onClick={handleImageClick} style={{ cursor: 'pointer' }}>
             {hasImage ? (
               <img src={msg.content} alt="" />
             ) : (
               <div className="wc-img-placeholder">
                 <svg width="80" height="80" viewBox="0 0 24 24" fill="none" stroke="#999" strokeWidth="1.5"><rect x="3" y="3" width="18" height="18" rx="2" /><circle cx="8.5" cy="8.5" r="1.5" fill="#999" stroke="none" /><path d="M21 15l-5-5L5 21" /></svg>
-                <span>点击上传图片</span>
+                <span>{onPickSticker ? '点击从素材库选图' : '点击上传图片'}</span>
               </div>
             )}
             <input ref={imgInputRef} type="file" accept="image/*" hidden onChange={handleImageUpload} />
@@ -143,8 +166,12 @@ function ChatBubble({ msg, user, userIndex, isSelf, isGroup, selfColor, otherCol
   );
 }
 
-export function PhonePreview({ users, messages, settings, selfId, phoneRef, onUpdateMessage }: PhonePreviewProps) {
+export function PhonePreview({ users, messages, settings, selfId, phoneRef, onUpdateMessage, onPickSticker, onUploadImage, screen }: PhonePreviewProps) {
   const bodyRef = useRef<HTMLDivElement | null>(null);
+  // 内部坐标系宽度固定 1125（见 PhonePreview.css），只有高度跟着屏幕比例走。
+  const designHeight = designHeightFor(screen ?? defaultScreenSize);
+  // 图片消息的最长边：读取时兜一次底，老项目里没有这个字段也能正常渲染。
+  const imageMax = normalizeImageMax(settings.imageMax);
 
   useEffect(() => {
     const timer = setTimeout(() => {
@@ -161,7 +188,7 @@ export function PhonePreview({ users, messages, settings, selfId, phoneRef, onUp
     <div className="wc-phone-scale-wrap">
       <div className="wc-phone-wrap">
         <div className="wc-phone-content">
-          <div className={`wc-phone wc-phone-${settings.platform}`} ref={phoneRef}>
+          <div className={`wc-phone wc-phone-${settings.platform}`} ref={phoneRef} style={{ '--wc-phone-design-height': `${designHeight}px`, '--wc-image-max': `${imageMax}px` } as CSSProperties}>
             <div className="wc-phone-top">
               <WechatPhoneHeader settings={settings} />
             </div>
@@ -194,6 +221,8 @@ export function PhonePreview({ users, messages, settings, selfId, phoneRef, onUp
                       selfColor={settings.selfBubbleColor}
                       otherColor={settings.otherBubbleColor}
                       onUpdateMessage={onUpdateMessage}
+                      onPickSticker={onPickSticker}
+                      onUploadImage={onUploadImage}
                     />
                   );
                 })}

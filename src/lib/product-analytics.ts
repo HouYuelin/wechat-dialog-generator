@@ -13,6 +13,8 @@ type EventName = GrowthEvent
   | 'page_view'
   | 'dialog_created'
   | 'image_exported'
+  | 'video_exported'
+  | 'media_assets_imported'
   | 'project_created'
   | 'project_reopened'
   | 'project_duplicated'

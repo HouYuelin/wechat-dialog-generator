@@ -2,6 +2,8 @@ import { Disclosure } from './ui/controls';
 import { useState, useRef } from 'react';
 import { PlusCircle, Type, Image, Gift, Banknote, Mic, Clock, X } from 'lucide-react';
 import type { ChatUser, ChatMessage, MessageType } from '@/types';
+import type { MediaAsset } from '@/lib/media-library';
+import { MediaLibraryStrip } from './MediaLibraryDialog';
 import { Input } from './ui/input';
 import { Textarea } from './ui/textarea';
 import { SelectField } from './ui/select';
@@ -12,6 +14,20 @@ interface MessageEditorProps {
   users: ChatUser[];
   selfId: number | null;
   onAddMessage: (msg: Omit<ChatMessage, 'id'>) => void;
+  /**
+   * 「图片」一栏待添加的那张图。状态放在外层，是因为素材库弹窗和编辑区的快捷条
+   * 都得能往里写（从库里挑一张 = 换掉待添加的这张）。
+   */
+  imagePreview: string | null;
+  onImagePreviewChange: (value: string | null) => void;
+  /** 上传一张新图：交给外层读文件并顺手存进素材库，返回可用的 data URL。 */
+  onUploadImage?: (file: File) => Promise<string | null>;
+  /** 素材库里已有的表情图片，供「图片」一栏直接点选。 */
+  stickers?: MediaAsset[];
+  libraryEnabled?: boolean;
+  /** 用掉一张库里的素材，外层借此更新「最近使用」顺序。 */
+  onStickerUsed?: (asset: MediaAsset) => void;
+  onOpenStickerLibrary?: () => void;
 }
 
 const MSG_TYPES: { type: MessageType; label: string; icon: React.ReactNode }[] = [
@@ -23,7 +39,7 @@ const MSG_TYPES: { type: MessageType; label: string; icon: React.ReactNode }[] =
   { type: 'time', label: '时间', icon: <Clock size={14} /> },
 ];
 
-export function MessageEditor({ users, selfId, onAddMessage }: MessageEditorProps) {
+export function MessageEditor({ users, selfId, onAddMessage, imagePreview, onImagePreviewChange, onUploadImage, stickers = [], libraryEnabled = false, onStickerUsed, onOpenStickerLibrary }: MessageEditorProps) {
   const [msgType, setMsgType] = useState<MessageType>('text');
   const [senderId, setSenderId] = useState<number | ''>(selfId ?? '');
   const [textContent, setTextContent] = useState('');
@@ -32,18 +48,22 @@ export function MessageEditor({ users, selfId, onAddMessage }: MessageEditorProp
   const [duration, setDuration] = useState('3');
   const [voiceTranscript, setVoiceTranscript] = useState('');
   const [timeContent, setTimeContent] = useState('');
-  const [imagePreview, setImagePreview] = useState<string | null>(null);
   const imgRef = useRef<HTMLInputElement>(null);
 
   const handleImageChange = (e: React.ChangeEvent<HTMLInputElement>) => {
     const file = e.target.files?.[0];
+    e.target.value = '';
     if (!file) return;
+    // 有外层处理（顺带入库）就走外层，读不出来时再退回本地直接读。
+    if (onUploadImage) {
+      void onUploadImage(file).then(url => { if (url) onImagePreviewChange(url); });
+      return;
+    }
     const reader = new FileReader();
     reader.onload = (ev) => {
-      setImagePreview(ev.target?.result as string);
+      onImagePreviewChange(ev.target?.result as string);
     };
     reader.readAsDataURL(file);
-    e.target.value = '';
   };
 
   const handleAdd = () => {
@@ -69,7 +89,7 @@ export function MessageEditor({ users, selfId, onAddMessage }: MessageEditorProp
           content: imagePreview || '',
           params: {},
         });
-        setImagePreview(null);
+        onImagePreviewChange(null);
         break;
       case 'redpacket':
         onAddMessage({
@@ -144,7 +164,7 @@ export function MessageEditor({ users, selfId, onAddMessage }: MessageEditorProp
             {imagePreview ? (
               <div className="me-img-preview">
                 <img src={imagePreview} alt="" />
-                <Button variant="destructive" size="icon" type="button" className="me-img-remove" style={{ width: 20, height: 20, padding: 0 }} aria-label="移除消息图片" onClick={() => setImagePreview(null)}><X size={14} /></Button>
+                <Button variant="destructive" size="icon" type="button" className="me-img-remove" style={{ width: 20, height: 20, padding: 0 }} aria-label="移除消息图片" onClick={() => onImagePreviewChange(null)}><X size={14} /></Button>
               </div>
             ) : (
               <Button variant="outline" className="me-img-upload" style={{ width: 100, height: 80 }} onClick={() => imgRef.current?.click()}>
@@ -154,6 +174,16 @@ export function MessageEditor({ users, selfId, onAddMessage }: MessageEditorProp
             )}
             <input ref={imgRef} type="file" accept="image/*" hidden onChange={handleImageChange} />
           </div>
+        )}
+
+        {msgType === 'image' && onOpenStickerLibrary && (
+          <MediaLibraryStrip
+            assets={stickers}
+            kind="sticker"
+            enabled={libraryEnabled}
+            onPick={asset => { onImagePreviewChange(asset.dataUrl); onStickerUsed?.(asset); }}
+            onManage={onOpenStickerLibrary}
+          />
         )}
 
         {msgType === 'redpacket' && (

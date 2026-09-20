@@ -1,4 +1,5 @@
 import type { PhoneSettings } from '@/types'
+import { defaultImageMax } from '@/lib/image-size'
 import { WechatPhoneHeader, type WechatHeaderAction } from '@/components/WechatPhoneHeader'
 
 interface WechatPhoneChromeProps {
@@ -9,7 +10,8 @@ interface WechatPhoneChromeProps {
   rightAction?: WechatHeaderAction
 }
 
-const compactHeaderSettings: PhoneSettings = { platform: 'ios', time: '12:02', signal: 4, secondarySignal: 4, simMode: 'single', wifiEnabled: true, battery: 87, contactName: '', unreadCount: 0, selfBubbleColor: '#95ec69', otherBubbleColor: '#ffffff', backgroundColor: '#ededed', backgroundImage: null }
+// 这里只用到状态栏那几个字段，其余（含图片大小）一律取默认值。
+const compactHeaderSettings: PhoneSettings = { platform: 'ios', time: '12:02', signal: 4, secondarySignal: 4, simMode: 'single', wifiEnabled: true, battery: 87, contactName: '', unreadCount: 0, selfBubbleColor: '#95ec69', otherBubbleColor: '#ffffff', backgroundColor: '#ededed', backgroundImage: null, imageMax: defaultImageMax }
 
 export function WechatPhoneChrome({ title = '', children, className = '', watermark = true, rightAction = 'dots' }: WechatPhoneChromeProps) {
   return (

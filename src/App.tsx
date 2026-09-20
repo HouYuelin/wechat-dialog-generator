@@ -3,12 +3,13 @@ import { Button } from '@/components/ui/button';
 import { Tabs, TabsList, TabsTrigger, TabsContent } from '@/components/ui/controls';
 import { ConfirmDialog } from '@/components/ui/confirm-dialog';
 import { useConfirm } from '@/lib/use-confirm';
-import { useState, useRef, useCallback, useEffect } from 'react';
+import { useState, useRef, useCallback, useEffect, useMemo } from 'react';
 import { captureChatPhone } from '@/lib/capture-chat';
-import { ArrowLeft, ArrowRight, BellRing, BookOpen, Check, ChevronRight, Download, Copy, FolderOpen, History, Image as ImageIcon, LayoutGrid, MessageSquare, Settings2, Share2, ShieldCheck, UserRound, UsersRound } from 'lucide-react';
+import { ArrowLeft, ArrowRight, BellRing, BookOpen, Check, ChevronRight, Download, Copy, FolderOpen, History, Image as ImageIcon, LayoutGrid, MessageSquare, Settings2, Share2, ShieldCheck, UserRound, UsersRound, Video } from 'lucide-react';
 import { ImportPanel } from '@/components/ImportPanel';
 import { UserAvatarManager } from '@/components/UserAvatarManager';
 import { MessageEditor } from '@/components/MessageEditor';
+import { MediaLibraryDialog } from '@/components/MediaLibraryDialog';
 import { SettingsPanel } from '@/components/SettingsPanel';
 import { PhonePreview } from '@/components/PhonePreview';
 import { GrowthContent } from '@/components/GrowthContent';
@@ -23,6 +24,21 @@ import { BatchStudio } from '@/components/BatchStudio';
 import { ExportLogPage } from '@/components/ExportLogPage';
 import { beginExportLog, exportLogError } from '@/lib/export-log';
 import { WorkspacePanels } from '@/components/WorkspacePanels';
+import { ChatPlaybackBar } from '@/components/ChatPlaybackBar';
+import { VideoExportDialog, VideoProgressOverlay } from '@/components/VideoExportDialog';
+import { renderChatFrames } from '@/components/chat-video-render';
+import {
+  buildPlaybackTimeline,
+  frameIndexAt,
+  maxVideoMessages,
+  notifyEvents,
+  playbackDurationLabel,
+  type PlaybackPace,
+} from '@/lib/chat-playback';
+import { pickVideoMimeType, videoContainerLabel, videoExportSupported, videoFileExtension, videoSizeOption, type VideoSizeId } from '@/lib/chat-video';
+import { defaultScreenSize, screenSizeLabel, type ScreenSize } from '@/lib/phone-size';
+import { recordChatVideo } from '@/lib/chat-video-recorder';
+import { loadNotifySoundFile, notifyAudioContext, playNotify, resumeNotifyAudio } from '@/lib/notify-sound';
 import { StudioLink, ToolHome } from '@/components/ToolHome';
 import { workspaceTools } from '@/lib/workspace-tools';
 import { readWorkspaceRoute, workspaceHref, type WorkspaceRoute } from '@/lib/workspace-route';
@@ -34,13 +50,17 @@ import {
   type OfficialAccountPlacement,
 } from '@/components/OfficialAccountDialog';
 import { parseChatRecord } from '@/lib/parser';
+import { carryOverAvatars, carryOverSelfId } from '@/lib/user-avatars';
 import {
   activeProjectStorageKey,
   copyProject,
+  deleteMediaAssetRecord,
   deleteProject,
   listProjects,
+  loadMediaAssets,
   projectHasContent,
   projectName,
+  putMediaAssets,
   saveProject,
   type ChatProject,
   type ChatProjectSnapshot,
@@ -68,6 +88,21 @@ import {
   type ExportQuota,
 } from '@/lib/account-api';
 import { createSameTemplateUrl, readSameTemplateHash } from '@/lib/share-link';
+import { readImageFile } from '@/lib/image-file';
+import {
+  addMediaAssets,
+  assignAvatars,
+  createMediaAsset,
+  findAssetByDataUrl,
+  mediaAssetsOfKind,
+  removeMediaAsset,
+  renameMediaAsset,
+  touchMediaAsset,
+  type MediaAsset,
+  type MediaImportSummary,
+  type MediaKind,
+} from '@/lib/media-library';
+import { defaultImageMax } from '@/lib/image-size';
 import type { ChatUser, ChatMessage, PhoneSettings } from '@/types';
 
 const defaultSettings: PhoneSettings = {
@@ -84,7 +119,13 @@ const defaultSettings: PhoneSettings = {
   otherBubbleColor: '#ffffff',
   backgroundColor: '#ededed',
   backgroundImage: null,
+  imageMax: defaultImageMax,
 };
+
+interface MediaImportOutcome extends MediaImportSummary {
+  /** 与传入文件顺序一致、可以直接用的素材（库里已有同图时复用旧记录）。 */
+  picked: MediaAsset[];
+}
 
 function App() {
   const [officialAccountPrompt, setOfficialAccountPrompt] = useState<OfficialAccountPlacement | null>(null);
@@ -123,7 +164,35 @@ function App() {
   const [messages, setMessages] = useState<ChatMessage[]>([]);
   const [settings, setSettings] = useState<PhoneSettings>(defaultSettings);
   const [selfId, setSelfId] = useState<number | null>(null);
+  // 素材库：上传过的头像与表情都留在这里，下次直接点选，不用再翻本地文件。
+  const [library, setLibrary] = useState<MediaAsset[]>([]);
+  // 只有真的读出来了才放出口；浏览器不给 IndexedDB 时这几个入口整体隐藏。
+  const [libraryReady, setLibraryReady] = useState(false);
+  /** 「添加消息 → 图片」里选中的那张，放在这里是为了素材库和快捷条都能往里写。 */
+  const [draftImage, setDraftImage] = useState<string | null>(null);
+  /** 素材库弹窗这次是为谁打开的：某位角色的头像 / 某条消息的图 / 只为待发送的草稿挑一张。 */
+  const [libraryPicker, setLibraryPicker] = useState<{ kind: MediaKind; userId?: number; msgId?: number; draft?: boolean } | null>(null);
   const [toast, setToast] = useState('');
+  // 定时发送播放与视频导出共用同一套节奏 / 提示音设置，保证预览里看到的速度就是导出的速度。
+  const [playbackActive, setPlaybackActive] = useState(false);
+  const [playbackPlaying, setPlaybackPlaying] = useState(false);
+  const [revealedCount, setRevealedCount] = useState(0);
+  const [playbackPace, setPlaybackPace] = useState<PlaybackPace>('normal');
+  const [soundEnabled, setSoundEnabled] = useState(true);
+  // 收到与发送是两种不同的音效，各自可选：默认只响「收到」，发送音效按需打开。
+  const [soundReceive, setSoundReceive] = useState(true);
+  const [soundSend, setSoundSend] = useState(false);
+  const revealedCountRef = useRef(0);
+  useEffect(() => { revealedCountRef.current = revealedCount }, [revealedCount]);
+  const [videoOpen, setVideoOpen] = useState(false);
+  const [videoSize, setVideoSize] = useState<VideoSizeId>('vertical');
+  // 屏幕尺寸就是导出分辨率：图片、视频帧都按它渲染。
+  const [screenSize, setScreenSize] = useState<ScreenSize>(defaultScreenSize);
+  const [soundSource, setSoundSource] = useState<'synth' | 'custom'>('synth');
+  const [customSound, setCustomSound] = useState<{ name: string; durationSeconds: number; buffer: AudioBuffer } | null>(null);
+  const [soundError, setSoundError] = useState('');
+  const [videoProgress, setVideoProgress] = useState<{ stage: 'render' | 'record'; current: number; total: number; elapsedMs: number; totalMs: number } | null>(null);
+  const videoToken = useRef({ cancelled: false });
   const [projects, setProjects] = useState<ChatProject[]>([]);
   const [activeProjectId, setActiveProjectId] = useState<string | null>(null);
   const [activeProjectName, setActiveProjectName] = useState('');
@@ -163,6 +232,20 @@ function App() {
     }
     void trackProductEvent('tool_selected', { tool: activeTool });
   }, [activeTool, isWorking]);
+
+  // 素材库独立于项目：换项目、重新导入、清空编辑器都不该影响它，所以单独读一次。
+  useEffect(() => {
+    if (!('indexedDB' in window)) return;
+    let cancelled = false;
+    void loadMediaAssets().then(assets => {
+      if (cancelled) return;
+      setLibrary(assets);
+      setLibraryReady(true);
+    }).catch(() => {
+      // 读不出来就不放出素材库入口，编辑和导出照常可用。
+    });
+    return () => { cancelled = true; };
+  }, []);
 
   useEffect(() => {
     let cancelled = false;
@@ -526,6 +609,8 @@ function App() {
     setMessages([]);
     setSettings(defaultSettings);
     setSelfId(null);
+    // 待添加的那张图属于刚才那份内容，换项目/新建时一起清掉。
+    setDraftImage(null);
     setActiveProjectId(null);
     setActiveProjectName('');
     setActiveProjectCreatedAt(null);
@@ -562,6 +647,7 @@ function App() {
     setMessages(project.messages);
     setSettings({ ...defaultSettings, ...project.settings });
     setSelfId(project.selfId);
+    setDraftImage(null);
     setActiveProjectId(project.id);
     setActiveProjectName(project.name);
     setActiveProjectCreatedAt(project.createdAt);
@@ -648,9 +734,13 @@ function App() {
       showToast('未解析到任何消息');
       return;
     }
-    setUsers(result.users);
+    // 重新解析会把用户 id 从 1 重排，所以按名字续上之前上传的头像和自己身份，
+    // 别让用户每换一段聊天记录就重传一次头像。
+    const nextUsers = carryOverAvatars(result.users, users, selfId);
+    const carried = nextUsers.filter((user, index) => !result.users[index].avatar && user.avatar).length;
+    setUsers(nextUsers);
     setMessages(result.messages);
-    setSelfId(result.users[0]?.id ?? null);
+    setSelfId(carryOverSelfId(nextUsers, users, selfId));
     if (result.users.length >= 3) {
       const otherNames = result.users.slice(1).map(u => u.name);
       const nameStr = result.users.length <= 4
@@ -662,8 +752,9 @@ function App() {
     } else if (result.users.length === 1) {
       setSettings(s => ({ ...s, contactName: result.users[0].name }));
     }
-    showToast(`成功导入 ${result.messages.length} 条消息（${result.users.length} 个用户）`);
-  }, [importText, showToast]);
+    const kept = carried > 0 ? `，已沿用 ${carried} 个头像` : '';
+    showToast(`成功导入 ${result.messages.length} 条消息（${result.users.length} 个用户）${kept}`);
+  }, [importText, selfId, showToast, users]);
 
   const handleUpdateAvatar = useCallback((userId: number, avatar: string) => {
     setUsers(prev => prev.map(u => u.id === userId ? { ...u, avatar } : u));
@@ -684,9 +775,344 @@ function App() {
     });
   }, []);
 
+  // ===================== 素材库 =====================
+  // 上传过的头像和图片都要留在素材库里，所以读文件这件事统一走这里：
+  // 上传、批量上传、给某条消息换图，最终都是「读成 data URL → 进库 → 返回可用的素材」。
+  const importMedia = useCallback(async (files: File[], kind: MediaKind): Promise<MediaImportOutcome> => {
+    const picked: MediaAsset[] = [];
+    let failed = 0;
+    for (const file of files) {
+      try {
+        const image = await readImageFile(file);
+        picked.push(createMediaAsset({ kind, name: image.name, dataUrl: image.dataUrl, width: image.width, height: image.height }));
+      } catch {
+        failed += 1;
+      }
+    }
+    const { library: next, added, duplicated, evicted } = addMediaAssets(library, picked);
+    // 库里已经有同一张图时复用旧记录，不然选中的素材会是一条库里不存在的“影子”。
+    const usable = picked.map(item => added.find(asset => asset.dataUrl === item.dataUrl) ?? findAssetByDataUrl(next, item.dataUrl) ?? item);
+    if (next !== library) {
+      setLibrary(next);
+      // 存储不可用（或读库失败）时只在内存里攒着：上传照样能用，只是留不到下次，
+      // 所以这里不去提示「保存失败」，免得每次传图都弹一条没用的警告。
+      if (libraryReady) void putMediaAssets(added).catch(() => showToast('素材库保存失败（可能是浏览器存储空间不足），本次图片仍可正常使用。'));
+    }
+    if (added.length) void trackProductEvent('media_assets_imported', { kind, count: String(added.length) });
+    return { picked: usable, added: added.length, duplicated, failed, evicted };
+  }, [library, libraryReady, showToast]);
+
+  /** 记一次使用：只为了让它在快捷条里排前面，顺便影响超上限时的淘汰顺序。 */
+  const markAssetUsed = useCallback((id: string) => {
+    const next = touchMediaAsset(library, id);
+    if (next === library) return;
+    setLibrary(next);
+    const touched = next.find(asset => asset.id === id);
+    if (touched) void putMediaAssets([touched]).catch(() => {});
+  }, [library]);
+
+  const applyAvatar = useCallback((userId: number, asset: MediaAsset) => {
+    setUsers(prev => prev.map(user => user.id === userId ? { ...user, avatar: asset.dataUrl } : user));
+    markAssetUsed(asset.id);
+  }, [markAssetUsed]);
+
+  /** 读一张图并入库，返回可直接渲染的 data URL；读不出来返回 null 并提示。 */
+  const uploadImageFile = useCallback(async (file: File) => {
+    const outcome = await importMedia([file], 'sticker');
+    const asset = outcome.picked[0];
+    if (!asset) {
+      showToast('这张图片读取失败，请换一张。');
+      return null;
+    }
+    return asset.dataUrl;
+  }, [importMedia, showToast]);
+
+  const handleUploadAvatar = useCallback(async (userId: number, file: File) => {
+    const outcome = await importMedia([file], 'avatar');
+    const asset = outcome.picked[0];
+    if (!asset) {
+      showToast('这张图片读取失败，请换一张。');
+      return;
+    }
+    applyAvatar(userId, asset);
+  }, [applyAvatar, importMedia, showToast]);
+
+  /** 批量上传头像：按选择顺序发给角色，多出来的只留在素材库里。 */
+  const handleBatchAvatars = useCallback(async (files: File[]) => {
+    const outcome = await importMedia(files, 'avatar');
+    if (!outcome.picked.length) {
+      showToast('这些文件都读不出来，请确认选的是图片。');
+      return;
+    }
+    const { users: nextUsers, assigned } = assignAvatars(users, outcome.picked);
+    if (assigned) setUsers(nextUsers);
+    const parts = [`已上传 ${outcome.picked.length} 张`];
+    if (assigned) parts.push(`按顺序换上 ${assigned} 位角色的头像`);
+    if (outcome.picked.length > assigned) parts.push(`多出的 ${outcome.picked.length - assigned} 张已存进素材库`);
+    if (outcome.duplicated) parts.push(`其中 ${outcome.duplicated} 张库里已有`);
+    if (outcome.failed) parts.push(`${outcome.failed} 张读取失败`);
+    showToast(`${parts.join('，')}。`);
+  }, [importMedia, showToast, users]);
+
+  /**
+   * 素材库弹窗里的批量上传。只传了一张、又明确知道是给谁用的时候直接换上，
+   * 省掉「传完再点一次使用」这一步；一次传多张就只入库，让用户自己挑。
+   */
+  const handleLibraryUpload = useCallback(async (files: File[], kind: MediaKind) => {
+    const outcome = await importMedia(files, kind);
+    const target = libraryPicker;
+    if (outcome.picked.length === 1 && target) {
+      const asset = outcome.picked[0];
+      if (target.userId !== undefined && kind === 'avatar') {
+        applyAvatar(target.userId, asset);
+        setLibraryPicker(null);
+      } else if (target.msgId !== undefined && kind === 'sticker') {
+        handleUpdateMessage(target.msgId, asset.dataUrl);
+        markAssetUsed(asset.id);
+        setLibraryPicker(null);
+      } else if (target.draft && kind === 'sticker') {
+        setDraftImage(asset.dataUrl);
+        markAssetUsed(asset.id);
+        setLibraryPicker(null);
+      }
+    }
+    return outcome;
+  }, [applyAvatar, handleUpdateMessage, importMedia, libraryPicker, markAssetUsed]);
+
+  const handlePickFromLibrary = useCallback((asset: MediaAsset) => {
+    const target = libraryPicker;
+    if (target?.userId !== undefined && asset.kind === 'avatar') {
+      applyAvatar(target.userId, asset);
+      setLibraryPicker(null);
+      showToast(`已换上「${asset.name}」`);
+      return;
+    }
+    if (target?.msgId !== undefined && asset.kind === 'sticker') {
+      handleUpdateMessage(target.msgId, asset.dataUrl);
+      markAssetUsed(asset.id);
+      setLibraryPicker(null);
+      showToast('这条消息的图片已更换');
+      return;
+    }
+    if (target?.draft && asset.kind === 'sticker') {
+      setDraftImage(asset.dataUrl);
+      markAssetUsed(asset.id);
+      setLibraryPicker(null);
+      showToast('已放入待添加的图片');
+      return;
+    }
+    // 从「素材库」入口进来、没有具体目标时，只是记一次使用。
+    markAssetUsed(asset.id);
+  }, [applyAvatar, handleUpdateMessage, libraryPicker, markAssetUsed, showToast]);
+
+  const handleRemoveAsset = useCallback((asset: MediaAsset) => {
+    setLibrary(prev => removeMediaAsset(prev, asset.id));
+    void deleteMediaAssetRecord(asset.id).catch(() => {});
+    // 已经用上的头像和图片是抄进项目里的副本，删素材不会把它从对话里抹掉。
+    showToast(`已从素材库删除「${asset.name}」，用上的头像与图片不受影响。`);
+  }, [showToast]);
+
+  const handleRenameAsset = useCallback((asset: MediaAsset, name: string) => {
+    const next = renameMediaAsset(library, asset.id, name);
+    if (next === library) return;
+    setLibrary(next);
+    const renamed = next.find(item => item.id === asset.id);
+    if (renamed) void putMediaAssets([renamed]).catch(() => {});
+  }, [library]);
+
   const capturePhone = useCallback(async (longshot = false) => {
-    return phoneRef.current ? captureChatPhone(phoneRef.current, longshot) : null;
+    return phoneRef.current ? captureChatPhone(phoneRef.current, longshot, screenSize) : null;
+  }, [screenSize]);
+
+  // ===================== 定时发送播放 =====================
+  // 播放与导出视频共用这条时间轴：预览里看到的速度就是导出视频的速度。
+  const playbackTimeline = useMemo(
+    () => buildPlaybackTimeline(messages, { pace: playbackPace, selfId, notifyReceived: soundReceive, notifySent: soundSend }),
+    [messages, playbackPace, selfId, soundReceive, soundSend],
+  );
+  // 整条时间轴上每一次发声的时刻与音效类型，预览播放和视频录制都用这一份。
+  const notifyAt = useMemo(
+    () => (soundEnabled ? notifyEvents(playbackTimeline) : []),
+    [soundEnabled, playbackTimeline],
+  );
+  const previewMessages = useMemo(
+    () => (playbackActive ? messages.slice(0, Math.min(revealedCount, messages.length)) : messages),
+    [playbackActive, messages, revealedCount],
+  );
+  const videoSupported = videoExportSupported();
+  const videoTooLong = messages.length > maxVideoMessages;
+  const videoContainer = videoSupported ? videoContainerLabel(pickVideoMimeType(type => MediaRecorder.isTypeSupported(type))) : '不支持';
+
+  const unlockAudio = useCallback(() => {
+    // 浏览器要求音频上下文在用户手势里解锁，否则播放和录制都会是静音。
+    const context = notifyAudioContext();
+    if (context) void resumeNotifyAudio(context);
+    return context;
   }, []);
+
+  useEffect(() => {
+    if (!playbackPlaying) return;
+    const timeline = playbackTimeline;
+    if (!timeline.messageCount) { setPlaybackPlaying(false); return; }
+    // 从当前进度继续：暂停再播放不会从头开始。
+    const base = Math.min(revealedCountRef.current, timeline.messageCount);
+    const offsetMs = timeline.frameAtMs[base] ?? 0;
+    const startedAt = performance.now();
+    const audio = soundEnabled ? notifyAudioContext() : null;
+    if (audio) void resumeNotifyAudio(audio);
+    const pending = notifyAt.filter(event => event.atMs > offsetMs);
+    const remaining = Math.max(0, timeline.totalMs - offsetMs);
+    // 上传过自定义提示音时，预览播放也用同一个音源，保证录屏和导出视频听感一致。
+    const soundBuffer = soundSource === 'custom' ? customSound?.buffer ?? null : null;
+    let notified = 0;
+    let lastIndex = -1;
+    let handle = requestAnimationFrame(function tick() {
+      const elapsed = performance.now() - startedAt;
+      const index = frameIndexAt(timeline.frameAtMs, elapsed + offsetMs);
+      // 每帧都 setState 会让整棵预览重渲染，只有画面真的换帧时才更新。
+      if (index !== lastIndex) {
+        lastIndex = index;
+        setRevealedCount(index);
+      }
+      while (notified < pending.length && pending[notified].atMs - offsetMs <= elapsed) {
+        playNotify(pending[notified].kind, audio, { buffer: soundBuffer });
+        notified += 1;
+      }
+      if (elapsed >= remaining) {
+        setRevealedCount(timeline.messageCount);
+        setPlaybackPlaying(false);
+        return;
+      }
+      handle = requestAnimationFrame(tick);
+    });
+    return () => cancelAnimationFrame(handle);
+  }, [playbackPlaying, playbackTimeline, notifyAt, soundEnabled, soundSource, customSound]);
+
+  useEffect(() => {
+    if (!playbackActive) return;
+    // 编辑消息后进度不能超过总条数，否则预览会空白。
+    setRevealedCount(current => Math.min(current, messages.length));
+  }, [messages.length, playbackActive]);
+
+  useEffect(() => {
+    if (route === 'chat' || !playbackActive) return;
+    setPlaybackPlaying(false);
+    setPlaybackActive(false);
+  }, [route, playbackActive]);
+
+  const handlePlayStart = useCallback(() => {
+    if (!messages.length) return;
+    unlockAudio();
+    setPlaybackActive(true);
+    if (revealedCountRef.current >= messages.length) setRevealedCount(0);
+    setPlaybackPlaying(true);
+  }, [messages.length, unlockAudio]);
+
+  const handlePlayPause = useCallback(() => setPlaybackPlaying(false), []);
+
+  const handlePlayReset = useCallback(() => {
+    unlockAudio();
+    setPlaybackActive(true);
+    setRevealedCount(0);
+    revealedCountRef.current = 0;
+    setPlaybackPlaying(true);
+  }, [unlockAudio]);
+
+  const handlePlayExit = useCallback(() => {
+    setPlaybackPlaying(false);
+    setPlaybackActive(false);
+    setRevealedCount(messages.length);
+  }, [messages.length]);
+
+  // ===================== 视频导出 =====================
+  const handleSoundFile = useCallback(async (file: File) => {
+    setSoundError('');
+    const context = unlockAudio();
+    if (!context) { setSoundError('当前浏览器不支持音频处理，请改用 Chrome 或 Edge。'); return; }
+    try {
+      const buffer = await loadNotifySoundFile(context, file);
+      setCustomSound({ name: file.name, durationSeconds: buffer.duration, buffer });
+      setSoundSource('custom');
+    } catch (error) {
+      setCustomSound(null);
+      setSoundError(error instanceof Error ? error.message : '音频读取失败，请换一个文件。');
+    }
+  }, [unlockAudio]);
+
+  const downloadBlob = useCallback((blob: Blob, filename: string) => {
+    const url = URL.createObjectURL(blob);
+    const link = document.createElement('a');
+    link.download = filename;
+    link.href = url;
+    link.click();
+    setTimeout(() => URL.revokeObjectURL(url), 60000);
+  }, []);
+
+  const handleExportVideo = useCallback(async () => {
+    if (!messages.length || videoTooLong || !videoSupported) return;
+    const size = videoSizeOption(videoSize, screenSize);
+    const mimeType = pickVideoMimeType(type => MediaRecorder.isTypeSupported(type));
+    const filename = '微信聊天视频_' + Date.now() + '.' + videoFileExtension(mimeType);
+    const log = beginExportLog({ tool: 'chat', mode: 'video', filename });
+    const timeline = playbackTimeline;
+    // 音效总开关关掉时 notifyAt 为空，这里就整段视频都不发声。
+    const soundEvents = notifyAt;
+    const audioContext = soundEvents.length ? unlockAudio() : null;
+    setVideoOpen(false);
+    videoToken.current = { cancelled: false };
+    setVideoProgress({ stage: 'render', current: 0, total: messages.length + 1, elapsedMs: 0, totalMs: timeline.totalMs });
+    showToast('正在生成视频，请保持本页在前台…');
+    try {
+      // 先做一次本地额度预检，避免白渲染一遍才发现没有额度。
+      if (!unlimited && visibleQuota.total_remaining <= 0) {
+        void log.finish('cancelled', '额度不足');
+        if (accountSession) openOfficialAccountPrompt('export');
+        else {
+          setAccountError('今日免费额度已用完，登录后可继续使用并领取关注奖励。');
+          setAccountPrompt(true);
+        }
+        return;
+      }
+      const frames = await renderChatFrames({ users, messages, settings, selfId, screen: screenSize }, {
+        token: videoToken.current,
+        onProgress: (current, total) => setVideoProgress({ stage: 'render', current, total, elapsedMs: 0, totalMs: timeline.totalMs }),
+      });
+      // 真正的扣次放在渲染之后：渲染过程中取消不消耗额度，只有开始录制才算一次导出。
+      const ticket = await authorizeExport();
+      if (!ticket) { void log.finish('cancelled', '额度校验未通过'); return; }
+      setVideoProgress({ stage: 'record', current: 0, total: messages.length, elapsedMs: 0, totalMs: timeline.totalMs });
+      const recorded = await recordChatVideo({
+        frames: frames.blobs,
+        frameWidth: frames.width,
+        frameHeight: frames.height,
+        frameAtMs: timeline.frameAtMs,
+        totalMs: timeline.totalMs,
+        size: { width: size.width, height: size.height },
+        background: settings.backgroundColor || '#ededed',
+        notifyAt: soundEvents,
+        audio: audioContext ? { context: audioContext, buffer: soundSource === 'custom' ? customSound?.buffer ?? null : null } : null,
+        token: videoToken.current,
+        onProgress: (elapsedMs, totalMs) => setVideoProgress({ stage: 'record', current: 0, total: messages.length, elapsedMs, totalMs }),
+      });
+      downloadBlob(recorded.blob, filename);
+      void log.finish('download_requested');
+      completeExport(ticket);
+      void trackProductEvent('video_exported', {
+        capture_mode: videoSize,
+        message_count_bucket: messageCountBucket(messages.length),
+        tool: 'chat',
+      });
+      showToast(`视频已生成并下载（${videoContainerLabel(recorded.mimeType)}）。`);
+      promptAfterExport();
+    } catch (error) {
+      const cancelled = videoToken.current.cancelled;
+      const message = error instanceof Error ? error.message : '生成视频失败';
+      void log.finish(cancelled ? 'cancelled' : 'failed', message);
+      showToast(cancelled ? '已取消生成。' : message);
+    } finally {
+      setVideoProgress(null);
+    }
+  }, [users, messages, settings, selfId, videoSize, screenSize, videoTooLong, videoSupported, playbackTimeline, notifyAt, soundSource, customSound, showToast, authorizeExport, completeExport, promptAfterExport, downloadBlob, unlockAudio, unlimited, visibleQuota.total_remaining, accountSession, openOfficialAccountPrompt]);
 
   const handleGenerateImage = useCallback(async () => {
     if (!phoneRef.current) return;
@@ -780,6 +1206,19 @@ function App() {
   }, [showToast, capturePhone, messages.length, promptAfterExport, authorizeExport, completeExport]);
 
   const hasMessages = messages.length > 0;
+  // 播放期间预览只渲染了一部分消息，此时截图会导出一段被截断的对话。
+  const captureDisabledHint = playbackActive ? '定时发送进行中：先点“显示全部”再导出图片' : undefined;
+  // 同一个素材库弹窗服务三个入口：换头像、换某条消息的图、给待发送的草稿挑一张。
+  const libraryTitle = libraryPicker?.userId !== undefined
+    ? '从素材库选头像'
+    : libraryPicker?.msgId !== undefined || libraryPicker?.draft ? '从素材库选图片' : '我的素材库';
+  const libraryDescription = libraryPicker?.userId !== undefined
+    ? '点一张即可换上这位角色的头像；也可以现在传几张新的，传一张就直接换上。'
+    : libraryPicker?.msgId !== undefined
+      ? '点一张即可换到这条消息上；新上传的图也会留在库里。'
+      : libraryPicker?.draft
+        ? '点一张放进「添加消息 → 图片」，再点添加即可。'
+        : '上传过的头像和表情都会留在这里，下次直接点选即可，不用再翻本地文件。';
 
   return (
     <>
@@ -816,17 +1255,66 @@ function App() {
               void trackProductEvent('image_exported', { capture_mode: 'standard', tool: 'batch' });
             }} /></div>
             <div className="studio-tool-page" hidden={route !== 'chat'} id="editor" ref={editorRef}>
-              <WorkspacePanels previewTitle="聊天效果预览" previewDescription="可滚动查看消息 · 导出宽度 1125px" preview={<PhonePreview users={users} messages={messages} settings={settings} selfId={selfId} phoneRef={phoneRef} onUpdateMessage={handleUpdateMessage} />}
-                previewActions={<div className="chat-export-actions"><div className="chat-export-summary"><span>{messages.length} 条消息 · {users.length} 个角色</span><span>{unlimited ? '会员不限次' : `剩余 ${visibleQuota.total_remaining} 次`}</span></div><Button type="button" className="btn btn-primary chat-export-primary" disabled={!hasMessages} onClick={handleGenerateImage}><Download size={16} /> 生成图片</Button><div className="chat-export-secondary"><Button type="button" className="btn btn-outline" disabled={!hasMessages} onClick={handleGenerateLongImage}><ImageIcon size={15} /> 长截图</Button><Button type="button" className="btn btn-outline" disabled={!hasMessages} onClick={handleCopyImage}><Copy size={15} /> 复制</Button><Button type="button" className="btn btn-outline" disabled={!hasMessages} onClick={handleShareSame}><Share2 size={15} /> 同款链接</Button></div></div>}>
+              <WorkspacePanels previewTitle="聊天效果预览" previewDescription={`可滚动查看消息 · 导出 ${screenSizeLabel(screenSize)}`} screen={screenSize} onScreenChange={setScreenSize} imageMax={settings.imageMax} onImageMaxChange={value => setSettings(current => ({ ...current, imageMax: value }))} preview={<PhonePreview users={users} messages={previewMessages} settings={settings} selfId={selfId} phoneRef={phoneRef} onUpdateMessage={handleUpdateMessage} screen={screenSize} onPickSticker={libraryReady ? msgId => setLibraryPicker({ kind: 'sticker', msgId }) : undefined} onUploadImage={libraryReady ? (_msgId, file) => uploadImageFile(file) : undefined} />}
+                previewActions={<div className="chat-export-actions">
+                  <ChatPlaybackBar
+                    active={playbackActive}
+                    playing={playbackPlaying}
+                    revealed={previewMessages.length}
+                    total={messages.length}
+                    pace={playbackPace}
+                    soundEnabled={soundEnabled}
+                    soundReceive={soundReceive}
+                    soundSend={soundSend}
+                    busy={videoProgress !== null}
+                    onPlay={handlePlayStart}
+                    onPause={handlePlayPause}
+                    onReset={handlePlayReset}
+                    onExit={handlePlayExit}
+                    onPaceChange={setPlaybackPace}
+                    onSoundToggle={setSoundEnabled}
+                    onSoundReceiveChange={setSoundReceive}
+                    onSoundSendChange={setSoundSend}
+                  />
+                  <div className="chat-export-summary"><span>{messages.length} 条消息 · {users.length} 个角色</span><span>{unlimited ? '会员不限次' : `剩余 ${visibleQuota.total_remaining} 次`}</span></div>
+                  <div className="chat-export-primary-row">
+                    <Button type="button" className="btn btn-primary chat-export-primary" disabled={!hasMessages || playbackActive} title={captureDisabledHint} onClick={handleGenerateImage}><Download size={16} /> 生成图片</Button>
+                    <Button type="button" className="btn btn-primary chat-export-primary" disabled={!hasMessages || videoTooLong || !videoSupported} title={videoTooLong ? `一次最多导出 ${maxVideoMessages} 条消息的视频` : videoSupported ? '按顺序播放并录制成视频，带消息提示音' : '当前浏览器不支持本地生成视频'} onClick={() => { setSoundError(''); setVideoOpen(true); }}><Video size={16} /> 生成视频</Button>
+                  </div>
+                  <div className="chat-export-secondary"><Button type="button" className="btn btn-outline" disabled={!hasMessages || playbackActive} title={captureDisabledHint} onClick={handleGenerateLongImage}><ImageIcon size={15} /> 长截图</Button><Button type="button" className="btn btn-outline" disabled={!hasMessages || playbackActive} title={captureDisabledHint} onClick={handleCopyImage}><Copy size={15} /> 复制</Button><Button type="button" className="btn btn-outline" disabled={!hasMessages} onClick={handleShareSame}><Share2 size={15} /> 同款链接</Button></div>
+                </div>}>
                 <div className="chat-project-bar"><label><span>当前对话</span><Input aria-label="工作页项目名称" placeholder="未命名对话" value={activeProjectName} maxLength={48} onChange={event => setActiveProjectName(event.target.value)} /></label><span className={`studio-save-state is-${saveState}`}>{saveState === 'saved' ? <><Check size={13} /> 已自动保存</> : saveState === 'saving' ? '保存中…' : saveState === 'error' ? '本地保存失败' : '仅保存在本机'}</span></div>
                 <Tabs value={chatSection} onValueChange={value => setChatSection(value as typeof chatSection)}>
                 <TabsList variant="line" className="studio-section-tabs" aria-label="聊天编辑面板">{([{ id: 'content', label: '聊天内容', icon: MessageSquare }, { id: 'people', label: '角色头像', icon: UsersRound }, { id: 'settings', label: '手机样式', icon: Settings2 }, { id: 'projects', label: '本地草稿', icon: FolderOpen }] as const).map(item => <TabsTrigger key={item.id} value={item.id}><item.icon size={15} />{item.label}</TabsTrigger>)}</TabsList>
                 <TabsContent className="chat-section-content" value="content" keepMounted>
                   <ImportPanel text={importText} onTextChange={setImportText} onImport={handleImport} />
-                  {users.length > 0 && <MessageEditor users={users} selfId={selfId} onAddMessage={handleAddMessage} />}
+                  {users.length > 0 && <MessageEditor
+                    users={users}
+                    selfId={selfId}
+                    onAddMessage={handleAddMessage}
+                    imagePreview={draftImage}
+                    onImagePreviewChange={setDraftImage}
+                    onUploadImage={uploadImageFile}
+                    stickers={mediaAssetsOfKind(library, 'sticker')}
+                    libraryEnabled={libraryReady}
+                    onStickerUsed={asset => markAssetUsed(asset.id)}
+                    onOpenStickerLibrary={() => setLibraryPicker({ kind: 'sticker', draft: true })}
+                  />}
                   {!hasMessages && <div className="workspace-getting-started"><span>第一次使用？</span><p>按“姓名：消息”逐行输入，点击解析即可预览。也可以从模板开始。</p><StudioLink route="resources" onNavigate={navigate}>选择对话模板 <ArrowRight size={14} /></StudioLink></div>}
                 </TabsContent>
-                <TabsContent className="chat-section-content" value="people" keepMounted>{users.length ? <UserAvatarManager users={users} selfId={selfId} onUpdateAvatar={handleUpdateAvatar} onRemoveAvatar={handleRemoveAvatar} onSetSelf={setSelfId} /> : <div className="workspace-empty"><UsersRound size={30} /><h2>先添加聊天角色</h2><p>导入对话后，即可在这里设置头像和“我”的身份。</p><Button type="button" className="btn btn-outline" onClick={() => setChatSection('content')}>编辑聊天内容</Button></div>}</TabsContent>
+                <TabsContent className="chat-section-content" value="people" keepMounted>{users.length ? <UserAvatarManager
+                  users={users}
+                  selfId={selfId}
+                  onUpdateAvatar={handleUpdateAvatar}
+                  onRemoveAvatar={handleRemoveAvatar}
+                  onSetSelf={setSelfId}
+                  onUploadAvatar={handleUploadAvatar}
+                  onBatchUpload={handleBatchAvatars}
+                  onOpenLibrary={userId => setLibraryPicker({ kind: 'avatar', userId })}
+                  onManageLibrary={() => setLibraryPicker({ kind: 'avatar' })}
+                  libraryAvatarCount={mediaAssetsOfKind(library, 'avatar').length}
+                  libraryEnabled={libraryReady}
+                /> : <div className="workspace-empty"><UsersRound size={30} /><h2>先添加聊天角色</h2><p>导入对话后，即可在这里设置头像和“我”的身份。</p><Button type="button" className="btn btn-outline" onClick={() => setChatSection('content')}>编辑聊天内容</Button></div>}</TabsContent>
                 <TabsContent className="chat-section-content" value="settings" keepMounted><SettingsPanel settings={settings} onSettingsChange={setSettings} /></TabsContent>
                 <TabsContent className="chat-section-content" value="projects" keepMounted><ProjectPanel projects={projects} activeProjectId={activeProjectId} activeProjectName={activeProjectName} saveState={saveState} storageAvailable={storageAvailable} onCreate={() => { void handleCreateProject().then(() => setChatSection('content')); }} onOpen={project => { void handleOpenProject(project).then(() => setChatSection('content')); }} onRename={setActiveProjectName} onDuplicate={project => { void handleDuplicateProject(project); }} onDelete={project => { void handleDeleteProject(project); }} />{!projects.length && <p className="workspace-muted">暂无本地草稿。开始编辑后会自动保存到当前浏览器。</p>}</TabsContent>
                 </Tabs>
@@ -870,6 +1358,66 @@ function App() {
       />
       {paymentPrompt && <PaymentDialog key={accountSession?.user.id || 'guest'} session={accountSession} onClose={() => setPaymentPrompt(false)} onAccount={() => { setPaymentPrompt(false); setAccountError(''); setAccountPrompt(true); }} onQuota={(userId, quota) => { setAccountSession(current => current?.user.id === userId ? { ...current, quota } : current); if (accountSession?.user.id === userId) setVisibleQuota(quota); }} />}
       {shareOpen && <ShareDialog session={accountSession} onClose={closeShare} onAccount={() => { setShareOpen(false); setAccountError(''); setAccountPrompt(true); }} />}
+      <MediaLibraryDialog
+        open={libraryPicker !== null}
+        onOpenChange={open => { if (!open) setLibraryPicker(null) }}
+        assets={library}
+        kind={libraryPicker?.kind ?? 'sticker'}
+        onKindChange={kind => setLibraryPicker(current => !current ? { kind } : {
+          // 换类目就等于换了用途，旧目标（某位角色 / 某条消息）不再适用，一并清掉。
+          kind,
+          userId: kind === 'avatar' ? current.userId : undefined,
+          msgId: kind === 'sticker' ? current.msgId : undefined,
+          draft: kind === 'sticker' ? current.draft : undefined,
+        })}
+        enabled={libraryReady}
+        title={libraryTitle}
+        description={libraryDescription}
+        pickLabel={libraryPicker?.userId !== undefined ? '设为头像' : '使用'}
+        onPick={handlePickFromLibrary}
+        onUpload={handleLibraryUpload}
+        onRemove={handleRemoveAsset}
+        onRename={handleRenameAsset}
+      />
+      <VideoExportDialog
+        open={videoOpen}
+        onOpenChange={open => { setVideoOpen(open); if (!open) setSoundError(''); }}
+        settings={{
+          size: videoSize,
+          pace: playbackPace,
+          soundEnabled,
+          soundReceive,
+          soundSend,
+          soundSource,
+          customSound: customSound ? { name: customSound.name, durationSeconds: customSound.durationSeconds } : null,
+        }}
+        onChange={patch => {
+          if (patch.size) setVideoSize(patch.size);
+          if (patch.pace) setPlaybackPace(patch.pace);
+          if (patch.soundEnabled !== undefined) setSoundEnabled(patch.soundEnabled);
+          if (patch.soundReceive !== undefined) setSoundReceive(patch.soundReceive);
+          if (patch.soundSend !== undefined) setSoundSend(patch.soundSend);
+          if (patch.soundSource) setSoundSource(patch.soundSource);
+        }}
+        messageCount={messages.length}
+        soundCount={notifyAt.length}
+        estimatedMs={playbackTimeline.totalMs + (messages.length + 1) * 300}
+        durationLabel={playbackDurationLabel(playbackTimeline.totalMs)}
+        containerLabel={videoContainer}
+        screen={screenSize}
+        supported={videoSupported && !videoTooLong}
+        soundError={soundError}
+        onSoundFile={file => void handleSoundFile(file)}
+        onConfirm={() => void handleExportVideo()}
+      />
+      {videoProgress && <VideoProgressOverlay
+        stage={videoProgress.stage}
+        current={videoProgress.current}
+        total={videoProgress.total}
+        elapsedMs={videoProgress.elapsedMs}
+        totalMs={videoProgress.totalMs}
+        onCancel={() => { videoToken.current.cancelled = true; }}
+      />}
     </>
   );
 }

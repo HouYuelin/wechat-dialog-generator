@@ -4,7 +4,7 @@ export const exportLogDatabase = 'wechat-toolbox-export-log'
 export const exportLogChanged = 'wechat-toolbox:export-log-changed'
 export const exportLogError = 'wechat-toolbox:export-log-error'
 export type ExportOutcome = 'pending' | 'generated' | 'download_requested' | 'copied' | 'failed' | 'cancelled'
-export type ExportMode = 'standard' | 'long' | 'clipboard' | 'zip'
+export type ExportMode = 'standard' | 'long' | 'clipboard' | 'zip' | 'video'
 export interface ExportLog {
   id: string
   tool: WechatTool
@@ -19,7 +19,7 @@ export interface ExportLog {
 export const exportOutcomes: Record<ExportOutcome, string> = {
   pending: '结果未确认', generated: '已生成', download_requested: '已发起下载', copied: '已复制', failed: '失败', cancelled: '未导出',
 }
-export const exportModes: Record<ExportMode, string> = { standard: '标准 PNG', long: '长图 PNG', clipboard: '剪贴板', zip: 'ZIP 打包' }
+export const exportModes: Record<ExportMode, string> = { standard: '标准 PNG', long: '长图 PNG', clipboard: '剪贴板', zip: 'ZIP 打包', video: '视频' }
 
 async function withStore<T>(mode: IDBTransactionMode, operation: (store: IDBObjectStore) => IDBRequest<T>): Promise<T> {
   const database = await new Promise<IDBDatabase>((resolve, reject) => {

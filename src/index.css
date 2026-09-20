@@ -1292,7 +1292,8 @@ input[type="range"].form-range::-webkit-slider-thumb:hover {
   border-radius: 16px;
   background: #FAFAFA;
   border: 1.5px solid transparent;
-  min-width: 100px;
+  /* 116px 是为了放下「素材库 + 设为自己」两个小按钮，不然它们会折行把卡片撑高。 */
+  min-width: 116px;
   transition: all 0.25s cubic-bezier(0.25, 0.46, 0.45, 0.94);
   position: relative;
 }
@@ -1372,26 +1373,46 @@ input[type="range"].form-range::-webkit-slider-thumb:hover {
   border-radius: 20px;
   letter-spacing: 0.3px;
 }
-.avatar-set-self {
+.avatar-card-tools {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: center;
+  justify-content: center;
+  gap: 4px;
+}
+/* 卡片里的按钮仍走工作区的 ui-button，这里只把它压到名片大小 */
+.avatar-card-tools .avatar-mini-btn {
   font-family: 'Outfit', sans-serif;
   font-size: 10px;
   font-weight: 600;
+  height: 22px;
+  padding: 0 8px;
+  gap: 3px;
+  border-radius: 20px;
   color: #8E8E93;
   background: #F5F5F7;
-  padding: 3px 10px;
-  border-radius: 20px;
   border: 1px solid #E5E5EA;
-  cursor: pointer;
-  display: flex;
-  align-items: center;
-  gap: 3px;
-  transition: all 0.2s;
   letter-spacing: 0.3px;
 }
-.avatar-set-self:hover {
+.avatar-card-tools .avatar-mini-btn:hover:not(:disabled) {
   color: #07c160;
   background: rgba(7,193,96,0.08);
   border-color: rgba(7,193,96,0.25);
+}
+.avatar-toolbar {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: center;
+  gap: 8px;
+  margin-bottom: 14px;
+  padding-bottom: 12px;
+  border-bottom: 1px dashed #E5E5EA;
+}
+.avatar-toolbar small {
+  flex-basis: 100%;
+  font-size: 11px;
+  line-height: 1.7;
+  color: #8E8E93;
 }
 
 /* ===================== PROMPT BLOCK ===================== */

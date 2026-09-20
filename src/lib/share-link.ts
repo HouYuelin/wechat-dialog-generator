@@ -1,5 +1,7 @@
 import type { ChatMessage, ChatUser, PhoneSettings } from '@/types'
 import type { ChatProjectSnapshot } from '@/lib/project-store'
+// 相对路径而不是 @/ 别名：单测用 tsx 直接跑源码，别名只在 Vite 里能解析。
+import { defaultImageMax, maxImageMax, minImageMax } from './image-size'
 
 const SHARE_PREFIX = 'same='
 const SHARE_VERSION = 1
@@ -74,6 +76,7 @@ function sanitizeSettings(value: unknown): PhoneSettings {
     backgroundColor: color(settings.backgroundColor, '#ededed'),
     // Uploaded background images stay local, just like avatars and message images.
     backgroundImage: null,
+    imageMax: boundedNumber(settings.imageMax, defaultImageMax, minImageMax, maxImageMax),
   }
 }
 

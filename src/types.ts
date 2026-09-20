@@ -33,4 +33,6 @@ export interface PhoneSettings {
   otherBubbleColor: string;
   backgroundColor: string;
   backgroundImage: string | null;
+  /** 聊天里图片消息最长边的上限，单位是内部坐标系 px（见 lib/image-size.ts）。 */
+  imageMax: number;
 }

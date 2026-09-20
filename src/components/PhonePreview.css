@@ -23,7 +23,8 @@
 }
 .wc-phone {
   width: 1125px;
-  height: 2436px;
+  /* 内部坐标系宽度固定 1125，高度由屏幕尺寸换算（PhonePreview 注入该变量）。 */
+  height: var(--wc-phone-design-height, 2436px);
   background: #ededed;
   position: relative;
   font-size: 36px;
@@ -422,14 +423,17 @@
   overflow: hidden;
 }
 .wc-bubble-image .wc-arrow { display: none; }
+/* 最长边上限由「图片大小」设置注入（见 lib/image-size.ts），420px 是历史默认值兜底。 */
 .wc-bubble-image img {
-  max-width: 420px;
-  max-height: 420px;
+  max-width: var(--wc-image-max, 420px);
+  max-height: var(--wc-image-max, 420px);
   display: block;
 }
+/* 占位框按同一比例缩放，否则选了「超大」后空图片框还是原来那么大，看着像没生效。
+   宽高 300×240 与图标 80px、文字 32px 都是按原来的 420px 上限算出来的。 */
 .wc-img-placeholder {
-  width: 300px;
-  height: 240px;
+  width: calc(var(--wc-image-max, 420px) * 5 / 7);
+  height: calc(var(--wc-image-max, 420px) * 4 / 7);
   display: flex;
   flex-direction: column;
   align-items: center;
@@ -438,8 +442,12 @@
   background: #f5f5f5;
   border-radius: 8px;
 }
+.wc-img-placeholder svg {
+  width: calc(var(--wc-image-max, 420px) * 80 / 420);
+  height: calc(var(--wc-image-max, 420px) * 80 / 420);
+}
 .wc-img-placeholder span {
-  font-size: 32px;
+  font-size: calc(var(--wc-image-max, 420px) * 32 / 420);
   color: #999;
 }
 

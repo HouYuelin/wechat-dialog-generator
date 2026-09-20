@@ -20,6 +20,7 @@ const emptySnapshot = {
     otherBubbleColor: '#ffffff',
     backgroundColor: '#ededed',
     backgroundImage: null,
+    imageMax: 420,
   },
   selfId: null,
 }
