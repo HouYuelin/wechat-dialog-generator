@@ -3,6 +3,7 @@ import type { ChatUser, ChatMessage, PhoneSettings } from '@/types';
 import { getDefaultAvatar } from '@/lib/parser';
 import { defaultScreenSize, designHeightFor, type ScreenSize } from '@/lib/phone-size';
 import { normalizeImageMax } from '@/lib/image-size';
+import { bubbleMaxWidth, fontScaleRatio, normalizeFontScale } from '@/lib/font-size';
 import { WechatPhoneHeader } from '@/components/WechatPhoneHeader';
 import './PhonePreview.css';
 
@@ -104,10 +105,11 @@ function ChatBubble({ msg, user, userIndex, isSelf, isGroup, selfColor, otherCol
       }
       case 'voice': {
         const dur = msg.params.duration || 2;
+        // 宽度按秒数算出来，得跟着字号一起缩放，否则「紧凑」档下语音条还是原来那么长。
         const w = 180 + Math.min(dur * 30, 400);
         return (
           <div className="wc-voice-stack">
-            <div className="wc-bubble wc-bubble-voice" style={{ background: bubbleColor, width: `${w}px` }}>
+            <div className="wc-bubble wc-bubble-voice" style={{ background: bubbleColor, width: `calc(${w}px * var(--wc-font-scale, 1))` }}>
               <span className="wc-arrow" style={{ background: bubbleColor }} />
               {isSelf ? (
                 <><span className="wc-voice-dur">{dur}&quot;</span><img className="wc-voice-wave" src={`${import.meta.env.BASE_URL}wechat-voice-icon2.png`} alt="" /></>
@@ -172,6 +174,9 @@ export function PhonePreview({ users, messages, settings, selfId, phoneRef, onUp
   const designHeight = designHeightFor(screen ?? defaultScreenSize);
   // 图片消息的最长边：读取时兜一次底，老项目里没有这个字段也能正常渲染。
   const imageMax = normalizeImageMax(settings.imageMax);
+  // 字号缩放：字号 / 行高 / 内边距 / 头像 / 间距这一整套度量都乘这个系数，
+  // 由 PhonePreview.css 消费。气泡可用宽度会跟着收窄，所以一并算出来注入。
+  const fontScale = normalizeFontScale(settings.fontScale);
 
   useEffect(() => {
     const timer = setTimeout(() => {
@@ -188,7 +193,7 @@ export function PhonePreview({ users, messages, settings, selfId, phoneRef, onUp
     <div className="wc-phone-scale-wrap">
       <div className="wc-phone-wrap">
         <div className="wc-phone-content">
-          <div className={`wc-phone wc-phone-${settings.platform}`} ref={phoneRef} style={{ '--wc-phone-design-height': `${designHeight}px`, '--wc-image-max': `${imageMax}px` } as CSSProperties}>
+          <div className={`wc-phone wc-phone-${settings.platform}`} ref={phoneRef} style={{ '--wc-phone-design-height': `${designHeight}px`, '--wc-image-max': `${imageMax}px`, '--wc-font-scale': String(fontScaleRatio(fontScale)), '--wc-body-max': `${bubbleMaxWidth(fontScale)}px` } as CSSProperties}>
             <div className="wc-phone-top">
               <WechatPhoneHeader settings={settings} />
             </div>

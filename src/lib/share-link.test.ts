@@ -30,6 +30,7 @@ const snapshot: ChatProjectSnapshot = {
     backgroundColor: '#ededed',
     backgroundImage: 'data:image/png;base64,private-background',
     imageMax: 700,
+    fontScale: 95,
   },
   selfId: 1,
 }
@@ -48,6 +49,8 @@ test('round trips a same-template URL without uploaded private media', async () 
   assert.equal(restored.settings.backgroundImage, null)
   // 图片大小是纯数值设置，不涉及本地媒体，所以要跟着模板传过去。
   assert.equal(restored.settings.imageMax, 700)
+  // 字体缩放同理：纯数值、不涉及本地媒体，所以也随模板传过去。
+  assert.equal(restored.settings.fontScale, 95)
 })
 
 test('rejects malformed shared snapshots', () => {

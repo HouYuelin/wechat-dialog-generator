@@ -2,6 +2,7 @@ import type { ChatMessage, ChatUser, PhoneSettings } from '@/types'
 import type { ChatProjectSnapshot } from '@/lib/project-store'
 // 相对路径而不是 @/ 别名：单测用 tsx 直接跑源码，别名只在 Vite 里能解析。
 import { defaultImageMax, maxImageMax, minImageMax } from './image-size'
+import { defaultFontScale, maxFontScale, minFontScale } from './font-size'
 
 const SHARE_PREFIX = 'same='
 const SHARE_VERSION = 1
@@ -77,6 +78,8 @@ function sanitizeSettings(value: unknown): PhoneSettings {
     // Uploaded background images stay local, just like avatars and message images.
     backgroundImage: null,
     imageMax: boundedNumber(settings.imageMax, defaultImageMax, minImageMax, maxImageMax),
+    // 字体缩放同样是纯数值设置，跟模板一起传过去。
+    fontScale: boundedNumber(settings.fontScale, defaultFontScale, minFontScale, maxFontScale),
   }
 }
 

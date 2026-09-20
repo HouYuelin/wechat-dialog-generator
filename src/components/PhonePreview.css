@@ -321,21 +321,24 @@
   text-shadow: 0 1px 4px rgba(0, 0, 0, 0.7);
 }
 .wc-chat-body-image .wc-notice-bg {
-  padding: 8px 18px;
-  border-radius: 8px;
+  padding: calc(8px * var(--wc-font-scale, 1)) calc(18px * var(--wc-font-scale, 1));
+  border-radius: calc(8px * var(--wc-font-scale, 1));
   background: rgba(0, 0, 0, 0.22);
   color: #fff;
   text-shadow: 0 1px 3px rgba(0, 0, 0, 0.35);
 }
 .wc-chat-body::-webkit-scrollbar { width: 0; display: none; }
 .wc-chat-body { scrollbar-width: none; -ms-overflow-style: none; }
+/* 聊天内容的整套度量都乘 --wc-font-scale（见 lib/font-size.ts）：字号、行高、内边距、
+   头像、间距一起缩，一屏才能真正多放几条消息，而不是只有字变小、框还是原来那么大。
+   系数为 1 时这些 calc 的结果与改动前的字面值完全一致。 */
 .wc-chat-content {
-  padding: 36px;
+  padding: calc(36px * var(--wc-font-scale, 1));
 }
 
 /* Messages */
 .wc-dialog {
-  margin-bottom: 50px;
+  margin-bottom: calc(50px * var(--wc-font-scale, 1));
   position: relative;
   display: flex;
 }
@@ -343,10 +346,10 @@
   justify-content: flex-end;
 }
 .wc-face {
-  width: 123px;
-  height: 123px;
+  width: calc(123px * var(--wc-font-scale, 1));
+  height: calc(123px * var(--wc-font-scale, 1));
   background: #f1f1f1;
-  border-radius: 15px;
+  border-radius: calc(15px * var(--wc-font-scale, 1));
   overflow: hidden;
   position: absolute;
   top: 0;
@@ -359,60 +362,63 @@
 .wc-dialog-right .wc-face {
   right: 0;
 }
+/* 上限用注入的 --wc-body-max（= 1125 − 412 × 系数，见 lib/font-size.ts），
+   不要再写成 calc(100% - 340px)：字号放大时可用宽度会一起收窄，图片和红包都跟它对齐。 */
 .wc-body {
   display: flex;
   flex-direction: column;
-  margin-left: 160px;
-  margin-right: 140px;
-  max-width: calc(100% - 340px);
+  margin-left: calc(160px * var(--wc-font-scale, 1));
+  margin-right: calc(140px * var(--wc-font-scale, 1));
+  max-width: var(--wc-body-max, calc(100% - 340px));
 }
 .wc-dialog-right .wc-body {
-  margin-left: 140px;
-  margin-right: 160px;
+  margin-left: calc(140px * var(--wc-font-scale, 1));
+  margin-right: calc(160px * var(--wc-font-scale, 1));
   align-items: flex-end;
 }
 .wc-nick {
-  font-size: 33px;
+  font-size: calc(33px * var(--wc-font-scale, 1));
   color: #999;
-  margin-bottom: 10px;
+  margin-bottom: calc(10px * var(--wc-font-scale, 1));
   line-height: 1;
-  padding-left: 6px;
+  padding-left: calc(6px * var(--wc-font-scale, 1));
 }
 .wc-dialog-right .wc-nick {
   text-align: right;
-  padding-right: 6px;
+  padding-right: calc(6px * var(--wc-font-scale, 1));
   padding-left: 0;
 }
 
 /* Bubble */
 .wc-bubble {
   background: #fff;
-  padding: 28px 38px;
-  font-size: 48px;
-  border-radius: 15px;
+  padding: calc(28px * var(--wc-font-scale, 1)) calc(38px * var(--wc-font-scale, 1));
+  font-size: calc(48px * var(--wc-font-scale, 1));
+  border-radius: calc(15px * var(--wc-font-scale, 1));
   word-break: break-all;
   display: inline-block;
   position: relative;
+  /* 无单位行高，跟着字号走，不用再乘系数。 */
   line-height: 1.4;
-  min-height: 80px;
+  min-height: calc(80px * var(--wc-font-scale, 1));
 }
 .wc-arrow {
   content: '';
   background: #fff;
-  width: 24px;
-  height: 24px;
-  border-bottom-left-radius: 4px;
-  top: 50px;
-  left: -12px;
+  width: calc(24px * var(--wc-font-scale, 1));
+  height: calc(24px * var(--wc-font-scale, 1));
+  border-bottom-left-radius: calc(4px * var(--wc-font-scale, 1));
+  top: calc(50px * var(--wc-font-scale, 1));
+  left: calc(-12px * var(--wc-font-scale, 1));
   position: absolute;
   transform: rotate(45deg);
   display: block;
 }
 .wc-dialog-right .wc-arrow {
   left: auto;
-  right: -10px;
+  right: calc(-10px * var(--wc-font-scale, 1));
   border-bottom-left-radius: 0;
-  border-top-right-radius: 4px;
+  border-top-right-radius: calc(4px * var(--wc-font-scale, 1));
 }
 
 /* Image */
@@ -423,9 +429,11 @@
   overflow: hidden;
 }
 .wc-bubble-image .wc-arrow { display: none; }
-/* 最长边上限由「图片大小」设置注入（见 lib/image-size.ts），420px 是历史默认值兜底。 */
+/* 最长边上限由「图片大小」设置注入（见 lib/image-size.ts），420px 是历史默认值兜底。
+   再跟 --wc-body-max 取一次 min：字号放大时气泡可用宽度会变窄，图片要跟着收，
+   否则会被 .wc-bubble-image 的 overflow: hidden 裁掉一块。 */
 .wc-bubble-image img {
-  max-width: var(--wc-image-max, 420px);
+  max-width: min(var(--wc-image-max, 420px), var(--wc-body-max, 713px));
   max-height: var(--wc-image-max, 420px);
   display: block;
 }
@@ -456,7 +464,8 @@
   display: flex;
   flex-direction: column;
   align-items: flex-start;
-  max-width: 700px;
+  /* 语音条本身的宽度由 PhonePreview 按秒数算好（已乘上系数），这里只兜住上限。 */
+  max-width: min(700px, var(--wc-body-max, 713px));
 }
 .wc-dialog-right .wc-voice-stack {
   align-items: flex-end;
@@ -465,39 +474,39 @@
   display: flex;
   align-items: center;
   justify-content: space-between;
-  padding-top: 25px;
-  padding-bottom: 25px;
+  padding-top: calc(25px * var(--wc-font-scale, 1));
+  padding-bottom: calc(25px * var(--wc-font-scale, 1));
 }
 .wc-voice-wave {
-  width: 34px;
-  height: 49px;
+  width: calc(34px * var(--wc-font-scale, 1));
+  height: calc(49px * var(--wc-font-scale, 1));
   flex: 0 0 auto;
   object-fit: contain;
 }
 .wc-voice-dur {
-  font-size: 42px;
-  padding: 0 12px;
+  font-size: calc(42px * var(--wc-font-scale, 1));
+  padding: 0 calc(12px * var(--wc-font-scale, 1));
   white-space: nowrap;
 }
 .wc-voice-unread {
   position: absolute;
-  right: -62px;
-  top: 20px;
-  width: 25px;
-  height: 25px;
+  right: calc(-62px * var(--wc-font-scale, 1));
+  top: calc(20px * var(--wc-font-scale, 1));
+  width: calc(25px * var(--wc-font-scale, 1));
+  height: calc(25px * var(--wc-font-scale, 1));
   border-radius: 50%;
   background: #e75e58;
 }
 .wc-voice-transcript {
   display: inline-block;
   width: fit-content;
-  max-width: 700px;
-  margin-top: 14px;
-  padding: 22px 30px;
-  border-radius: 14px;
+  max-width: min(700px, var(--wc-body-max, 713px));
+  margin-top: calc(14px * var(--wc-font-scale, 1));
+  padding: calc(22px * var(--wc-font-scale, 1)) calc(30px * var(--wc-font-scale, 1));
+  border-radius: calc(14px * var(--wc-font-scale, 1));
   background: #fff;
   color: #111;
-  font-size: 48px;
+  font-size: calc(48px * var(--wc-font-scale, 1));
   line-height: 1.5;
   text-align: left;
   white-space: pre-wrap;
@@ -508,18 +517,19 @@
 .wc-bubble-redpacket,
 .wc-bubble-transfer {
   background: #f79c46 !important;
-  width: 700px;
+  /* 固定 700px 的卡片也要跟气泡可用宽度取 min，字号放大时它得收窄，否则会撑出屏幕。 */
+  width: min(700px, var(--wc-body-max, 713px));
   padding: 0 !important;
   min-height: auto !important;
-  border-radius: 15px;
+  border-radius: calc(15px * var(--wc-font-scale, 1));
   overflow: visible;
 }
 .wc-rp-content {
   display: flex;
-  height: 192px;
+  height: calc(192px * var(--wc-font-scale, 1));
   align-items: center;
   position: relative;
-  padding: 0 30px;
+  padding: 0 calc(30px * var(--wc-font-scale, 1));
 }
 .wc-rp-content::after {
   content: '';
@@ -531,66 +541,66 @@
   left: 0;
 }
 .wc-rp-icon {
-  width: 120px;
-  height: 120px;
+  width: calc(120px * var(--wc-font-scale, 1));
+  height: calc(120px * var(--wc-font-scale, 1));
   display: flex;
   align-items: center;
   justify-content: center;
   flex-shrink: 0;
 }
 .wc-rp-icon img {
-  width: 120px;
-  height: 120px;
+  width: calc(120px * var(--wc-font-scale, 1));
+  height: calc(120px * var(--wc-font-scale, 1));
   display: block;
   object-fit: contain;
 }
 .wc-rp-icon-redpacket {
-  width: 111px;
-  padding-left: 9px;
+  width: calc(111px * var(--wc-font-scale, 1));
+  padding-left: calc(9px * var(--wc-font-scale, 1));
 }
 .wc-rp-info {
   flex: 1;
   display: flex;
   flex-direction: column;
-  margin-left: 30px;
+  margin-left: calc(30px * var(--wc-font-scale, 1));
   overflow: hidden;
 }
 .wc-rp-info span {
-  font-size: 48px;
+  font-size: calc(48px * var(--wc-font-scale, 1));
   color: #fff;
   white-space: nowrap;
   overflow: hidden;
   text-overflow: ellipsis;
 }
 .wc-rp-info small {
-  font-size: 36px;
+  font-size: calc(36px * var(--wc-font-scale, 1));
   color: #fff;
   opacity: 0.85;
 }
 .wc-rp-bottom {
-  height: 71px;
+  height: calc(71px * var(--wc-font-scale, 1));
   display: flex;
   align-items: center;
-  padding: 0 30px;
+  padding: 0 calc(30px * var(--wc-font-scale, 1));
 }
 .wc-rp-bottom span {
-  font-size: 36px;
+  font-size: calc(36px * var(--wc-font-scale, 1));
   color: #faecda;
 }
 
 /* Time notice */
 .wc-notice {
-  font-size: 36px;
+  font-size: calc(36px * var(--wc-font-scale, 1));
   color: #b0b0b0;
   display: flex;
   justify-content: center;
   flex: 1;
-  margin-bottom: 50px;
+  margin-bottom: calc(50px * var(--wc-font-scale, 1));
 }
 .wc-notice-bg {
   background: none;
   color: #b0b0b0;
-  padding: 10px 17px;
+  padding: calc(10px * var(--wc-font-scale, 1)) calc(17px * var(--wc-font-scale, 1));
 }
 
 /* Bottom */

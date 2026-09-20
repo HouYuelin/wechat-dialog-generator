@@ -41,6 +41,18 @@ import {
   resolveImageMax,
   type ImageSizeId,
 } from '@/lib/image-size'
+import {
+  clampFontScale,
+  fontScaleIdFor,
+  fontScaleLabel,
+  fontScalePreset,
+  fontScalePresets,
+  maxFontScale,
+  minFontScale,
+  normalizeFontScale,
+  resolveFontScale,
+  type FontScaleId,
+} from '@/lib/font-size'
 import './Workspace.css'
 
 interface WorkspacePanelsProps {
@@ -55,6 +67,9 @@ interface WorkspacePanelsProps {
   /** 传了才显示「图片大小」这一段，取值来自 PhoneSettings.imageMax。 */
   imageMax?: number
   onImageMaxChange?: (value: number) => void
+  /** 传了才显示「字体大小」这一段，取值来自 PhoneSettings.fontScale。 */
+  fontScale?: number
+  onFontScaleChange?: (value: number) => void
 }
 
 interface SizeChoice {
@@ -74,16 +89,19 @@ const screenRangeNote = `可填 ${minScreenWidth}–${maxScreenWidth} × ${minSc
 
 const imageCustomNote = `可填 ${minImageMax}–${maxImageMax}px；超过上限气泡会把图片裁掉。`
 
+const fontCustomNote = `可填 ${minFontScale}–${maxFontScale}%；调小能让一屏放下更多消息。`
+
 function draftText(size: ScreenSize) {
   return { width: String(size.width), height: String(size.height) }
 }
 
 /** Shared editor/preview layout. Only the editor scrolls; export actions stay in reach. */
-export function WorkspacePanels({ children, preview, previewActions, previewTitle = '实时预览', previewDescription = '画面随编辑更新，导出保留原始清晰度', screen, onScreenChange, imageMax, onImageMaxChange }: WorkspacePanelsProps) {
+export function WorkspacePanels({ children, preview, previewActions, previewTitle = '实时预览', previewDescription = '画面随编辑更新，导出保留原始清晰度', screen, onScreenChange, imageMax, onImageMaxChange, fontScale, onFontScaleChange }: WorkspacePanelsProps) {
   const screenSize = screen ?? defaultScreenSize
   const screenLabel = screenSizeLabel(screenSize)
   const aspect = phoneAspect(screenSize)
   const imageMaxValue = normalizeImageMax(imageMax)
+  const fontScaleValue = normalizeFontScale(fontScale)
   const [view, setView] = useState<'edit' | 'preview'>('edit')
   // autoWidth 是量出来的自适应宽度；sizeMode 是用户手动选定的档位，选 auto 时才会用前者。
   const [autoWidth, setAutoWidth] = useState(300)
@@ -100,6 +118,10 @@ export function WorkspacePanels({ children, preview, previewActions, previewTitl
   const [imageMode, setImageMode] = useState<ImageSizeId>(() => imagePresetIdFor(imageMaxValue))
   const [imageDraft, setImageDraft] = useState(imageMaxValue)
   const [imageDraftText, setImageDraftText] = useState(() => String(imageMaxValue))
+  // 字体大小的真值同样由父级存进 settings，这里只维护弹层里的档位与草稿。
+  const [fontMode, setFontMode] = useState<FontScaleId>(() => fontScaleIdFor(fontScaleValue))
+  const [fontDraft, setFontDraft] = useState(fontScaleValue)
+  const [fontDraftText, setFontDraftText] = useState(() => String(fontScaleValue))
   // 专注模式：隐藏编辑区，给手机画面更大的显示区域，方便录屏时取景更干净。
   const [focus, setFocus] = useState(false)
   const bodyRef = useRef<HTMLDivElement>(null)
@@ -109,6 +131,7 @@ export function WorkspacePanels({ children, preview, previewActions, previewTitl
   const sizeChoice = sizeChoices.find(choice => choice.id === sizeMode) ?? sizeChoices[0]
   const screenChoice = screenSizePreset(screenMode)
   const imageChoice = imageSizePreset(imageMode)
+  const fontChoice = fontScalePreset(fontMode)
 
   useEffect(() => {
     const node = bodyRef.current
@@ -191,10 +214,31 @@ export function WorkspacePanels({ children, preview, previewActions, previewTitl
     onImageMaxChange?.(next)
   }
 
+  const chooseFont = (id: FontScaleId) => {
+    setFontMode(id)
+    // 切到自定义时先把草稿对齐到当前实际值，免得输入框里留着上一次的旧数字。
+    const next = resolveFontScale(id, fontScaleValue)
+    if (id === 'custom') {
+      setFontDraft(next)
+      setFontDraftText(String(next))
+    }
+    onFontScaleChange?.(next)
+  }
+
+  // 同样是失焦 / 回车才提交，输到一半的「8」不会被立刻顶成下限。
+  const commitFont = () => {
+    const parsed = Number.parseInt(fontDraftText, 10)
+    const next = clampFontScale(Number.isNaN(parsed) ? fontDraft : parsed)
+    setFontDraft(next)
+    setFontDraftText(String(next))
+    onFontScaleChange?.(next)
+  }
+
   const sizeTriggerLabel = [
     `聊天窗口大小：${sizeChoice.label} ${phoneWidth}px`,
     screen ? `屏幕 ${screenLabel}` : '',
     imageMax === undefined ? '' : `图片 ${imageSizeLabel(imageMode, imageMaxValue)}`,
+    fontScale === undefined ? '' : `字体 ${fontScaleLabel(fontMode, fontScaleValue)}`,
   ].filter(Boolean).join('；')
 
   return <div className="workspace-panels" data-mobile-view={view} data-focus={focus}>
@@ -207,7 +251,7 @@ export function WorkspacePanels({ children, preview, previewActions, previewTitl
             <Popover.Trigger render={<Button variant="ghost" size="icon" type="button" className="workspace-size-toggle" aria-label={sizeTriggerLabel} title={sizeTriggerLabel} />}><Smartphone size={14} /></Popover.Trigger>
             <Popover.Portal>
               <Popover.Positioner sideOffset={6} align="end" className="workspace-size-positioner">
-                <Popover.Popup className="workspace-size-popup" aria-label={screen ? '聊天窗口、屏幕与图片尺寸' : '聊天窗口大小'}>
+                <Popover.Popup className="workspace-size-popup" aria-label={screen ? '聊天窗口、屏幕、图片与字体大小' : '聊天窗口大小'}>
                   <div className="workspace-size-head"><span>预览显示</span><small>当前 {phoneWidth}px</small></div>
                   <div className="workspace-size-list" role="radiogroup" aria-label="窗口大小档位">
                     {sizeChoices.map(choice => <button
@@ -338,6 +382,46 @@ export function WorkspacePanels({ children, preview, previewActions, previewTitl
                     </div>}
                     <p className="workspace-size-note">{imageChoice ? imageChoice.note : imageCustomNote}</p>
                     <p className="workspace-size-note">图片按最长边等比缩放，不改比例；预览、导出图片和视频用的是同一个值。</p>
+                  </div>}
+                  {fontScale !== undefined && <div className="workspace-size-section">
+                    <div className="workspace-size-head"><span>字体大小</span><small>当前 {fontScaleValue}%</small></div>
+                    <div className="workspace-size-grid" role="radiogroup" aria-label="对话字体大小">
+                      {fontScalePresets.map(preset => <button
+                        key={preset.id}
+                        type="button"
+                        role="radio"
+                        aria-checked={fontMode === preset.id}
+                        className="workspace-size-chip"
+                        data-active={fontMode === preset.id}
+                        onClick={() => chooseFont(preset.id)}
+                      >{preset.label} {preset.scale}%</button>)}
+                      <button
+                        type="button"
+                        role="radio"
+                        aria-checked={fontMode === 'custom'}
+                        className="workspace-size-chip workspace-size-chip-wide"
+                        data-active={fontMode === 'custom'}
+                        onClick={() => chooseFont('custom')}
+                      >自定义比例</button>
+                    </div>
+                    {fontMode === 'custom' && <div className="workspace-size-custom">
+                      <label htmlFor="workspace-font-scale">比例</label>
+                      <Input
+                        id="workspace-font-scale"
+                        type="number"
+                        inputMode="numeric"
+                        min={minFontScale}
+                        max={maxFontScale}
+                        step={5}
+                        value={fontDraftText}
+                        onChange={event => setFontDraftText(event.target.value)}
+                        onBlur={commitFont}
+                        onKeyDown={event => { if (event.key === 'Enter') { event.preventDefault(); commitFont() } }}
+                      />
+                      <span>%</span>
+                    </div>}
+                    <p className="workspace-size-note">{fontChoice ? fontChoice.note : fontCustomNote}</p>
+                    <p className="workspace-size-note">字号、行高、气泡留白与头像会一起缩放，一屏能放下的消息条数跟着变；预览与导出用的是同一个值。</p>
                   </div>}
                 </Popover.Popup>
               </Popover.Positioner>

@@ -21,6 +21,7 @@ const emptySnapshot = {
     backgroundColor: '#ededed',
     backgroundImage: null,
     imageMax: 420,
+    fontScale: 100,
   },
   selfId: null,
 }

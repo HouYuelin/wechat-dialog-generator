@@ -103,6 +103,7 @@ import {
   type MediaKind,
 } from '@/lib/media-library';
 import { defaultImageMax } from '@/lib/image-size';
+import { defaultFontScale } from '@/lib/font-size';
 import type { ChatUser, ChatMessage, PhoneSettings } from '@/types';
 
 const defaultSettings: PhoneSettings = {
@@ -120,6 +121,7 @@ const defaultSettings: PhoneSettings = {
   backgroundColor: '#ededed',
   backgroundImage: null,
   imageMax: defaultImageMax,
+  fontScale: defaultFontScale,
 };
 
 interface MediaImportOutcome extends MediaImportSummary {
@@ -1255,7 +1257,7 @@ function App() {
               void trackProductEvent('image_exported', { capture_mode: 'standard', tool: 'batch' });
             }} /></div>
             <div className="studio-tool-page" hidden={route !== 'chat'} id="editor" ref={editorRef}>
-              <WorkspacePanels previewTitle="聊天效果预览" previewDescription={`可滚动查看消息 · 导出 ${screenSizeLabel(screenSize)}`} screen={screenSize} onScreenChange={setScreenSize} imageMax={settings.imageMax} onImageMaxChange={value => setSettings(current => ({ ...current, imageMax: value }))} preview={<PhonePreview users={users} messages={previewMessages} settings={settings} selfId={selfId} phoneRef={phoneRef} onUpdateMessage={handleUpdateMessage} screen={screenSize} onPickSticker={libraryReady ? msgId => setLibraryPicker({ kind: 'sticker', msgId }) : undefined} onUploadImage={libraryReady ? (_msgId, file) => uploadImageFile(file) : undefined} />}
+              <WorkspacePanels previewTitle="聊天效果预览" previewDescription={`可滚动查看消息 · 导出 ${screenSizeLabel(screenSize)}`} screen={screenSize} onScreenChange={setScreenSize} imageMax={settings.imageMax} onImageMaxChange={value => setSettings(current => ({ ...current, imageMax: value }))} fontScale={settings.fontScale} onFontScaleChange={value => setSettings(current => ({ ...current, fontScale: value }))} preview={<PhonePreview users={users} messages={previewMessages} settings={settings} selfId={selfId} phoneRef={phoneRef} onUpdateMessage={handleUpdateMessage} screen={screenSize} onPickSticker={libraryReady ? msgId => setLibraryPicker({ kind: 'sticker', msgId }) : undefined} onUploadImage={libraryReady ? (_msgId, file) => uploadImageFile(file) : undefined} />}
                 previewActions={<div className="chat-export-actions">
                   <ChatPlaybackBar
                     active={playbackActive}

@@ -101,7 +101,7 @@
 图片消息此前固定 `max-width / max-height: 420px`（`PhonePreview.css`），长图和主图会显得偏小。现在改为可调：
 
 - 档位 小 300 / 标准 420 / 大 540 / 超大 700（**内部坐标系 px**，不是导出像素），另有自定义最长边 160–700。计算集中在 `src/lib/image-size.ts`，弹层只维护档位与草稿。
-- **上限 700px 是被 CSS 卡出来的**，不是随手定的：`.wc-chat-content` 左右各 36px 内边距、`.wc-body` 的 max-width 是 `calc(100% - 340px)`，所以在 1125 的坐标系里气泡最宽 `1125 − 36×2 − 340 = 713px`，再减去图片气泡 1px 的双边边框只剩 711px。`image-size.test.ts` 有一条断言守着这个跨文件不变量。
+- **上限 700px 是被 CSS 卡出来的**，不是随手定的：`.wc-chat-content` 左右各 36px 内边距、`.wc-body` 的 max-width 减 340px，所以在 1125 的坐标系里气泡最宽 `1125 − 36×2 − 340 = 713px`，再减去图片气泡 1px 的双边边框只剩 711px。`image-size.test.ts` 有一条断言守着这个跨文件不变量。**字号放大时这个可用宽度会跟着收窄**（见「对话字体大小」一节），所以图片与红包的上限额外与 `--wc-body-max` 取了一次 min。
 - 取值存进 `PhoneSettings.imageMax`，由 `PhonePreview` 注入 `--wc-image-max`。所以预览、单图导出、长截图、视频帧、批量导出拿到的是**同一个值**，导出链路（`captureChatPhone` / `renderChatFrames` / `batch.ts`）一行都不用改。
 - 图片按最长边等比缩放，不改比例。空图片占位框按同一比例缩放，否则选了「超大」后占位框还是原来 300×240，看着像没生效。
 - 旧项目与老分享链接没有这个字段，读取时由 `normalizeImageMax()` 退回默认 420；`sanitizeSettings()` 会把分享链接里的值夹进合法范围。
@@ -142,4 +142,28 @@
 - 预览里点图片消息气泡：打开素材库选一张，弹窗里也能现传；只传一张时直接换上，省掉再点一次「使用」。
 - 弹窗按「为什么打开」给出不同标题与按钮文案（设为头像 / 使用），换类目时会清掉旧目标（某位角色 / 某条消息）。
 - 弹窗拆成内外两层：`Dialog.Popup` 关闭会卸载整棵子树，`busy` / 回执 / 改名草稿这些临时状态随之消失，不需要额外 effect 清空（同上一条弹层约定）。
+
+## 2026-09-20 对话字体大小
+
+需求是「内容多的时候想一屏看到更多，把字体调小一点」。所以这里调整的不是一个字号，而是一整套排版度量。
+
+### 一个系数管一整套度量
+
+- `--wc-font-scale`（由 `PhonePreview` 注入，取值为 70–140 的百分比除以 100）乘在 `PhonePreview.css` 里所有**属于聊天内容**的度量上：气泡字号与内边距、行高（无单位，天然跟随）、头像尺寸与圆角、头像与气泡的间距、消息之间的留白、昵称与时间戳字号、语音条与红包内部的比例。
+- **只改字号是不够的**：气泡的 `padding: 28px 38px` 加一行 48px × 1.4 的文字恰好凑出 123px，与头像的 123px 齐平；只缩字号的话框还是原来那么大，一屏多放不下几条，看着也像「字小了、框空了」。所以整套度量一起缩，比例关系保持不变。
+- **手机外壳不缩放**：状态栏、导航栏、底部输入栏（`.wc-status-bar` / `.wc-nav` / `.wc-bottom`）与「对话内容」无关；聊天区高度（`top: 264px / bottom: 269px`）也不变——正是这个固定高度配上更小的字号，才换来一屏能放下更多内容。
+- 系数为 100% 时所有 `calc(Npx * 1)` 的结果与改动前的字面值完全一致，老草稿打开后一个像素都不变。
+
+### 放大时会挤窄气泡，所以宽度也要跟着收
+
+- `.wc-body` 的 `max-width` 改由 `--wc-body-max` 给出，而这个值**由 JS 计算并注入**（`bubbleMaxWidth(scale)`，`src/lib/font-size.ts`），CSS 不再自己写 `calc(100% - 340px)`。理由是它同时被 `.wc-body`、图片的 `max-width`、红包与语音条宽度引用，写在 JS 里能用单测守住，写四遍 `calc` 一定会走偏（另外 340 并不是两侧 margin 之和 300，CSS 里另留了 40px 余量，别按 margin 反推）。
+- 100% 时它等于 713px（`1125 − 36×2 − 340`），与 `image-size.ts` 里「图片上限 700 是被 CSS 卡出来的」是同一个数。字号放大到 140% 时缩到 548px，所以 `.wc-bubble-image img`、`.wc-bubble-redpacket / -transfer`、`.wc-voice-stack`、`.wc-voice-transcript` 的上限都写成 `min(原上限, var(--wc-body-max, 713px))`——不收窄的话图片会被 `overflow: hidden` 裁掉一块，红包会顶出屏幕。
+- 语音条宽度是按秒数算出来的内联样式（`180 + min(时长 × 30, 400)`），一并改成 `calc(Npx * var(--wc-font-scale, 1))`，否则「紧凑」档下语音条还是原来那么长。
+
+### 与图片大小、屏幕尺寸的关系
+
+- 取值存进 `PhoneSettings.fontScale`（百分比整数），和 `imageMax` 一样由 `PhonePreview` 注入 CSS 变量，所以**预览 / 单图导出 / 长截图 / 视频帧 / 批量导出用的是同一个值**，导出链路一行没改。
+- 单位是内部坐标系 px，与导出分辨率（屏幕尺寸）无关：换分辨率时字号占屏幕的比例不变。
+- 新增字段要同步 `App.tsx` 的 `defaultSettings`、`share-link.ts` 的 `sanitizeSettings`，以及 `project-store.test.ts` / `share-link.test.ts` / `WechatPhoneChrome.tsx` 三处字面量；旧项目缺字段由 `normalizeFontScale()` 兜底。
+- 档位：紧凑 80 / 偏小 90 / 标准 100 / 偏大 115 / 特大 130，自定义 70–140。真值域在 `clampFontScale` / `normalizeFontScale` / `fontScaleRatio` 里收口，`font-size.test.ts` 9 条断言覆盖（含「100% 时气泡可用宽度恰为 713」这条跨文件不变量）。
 
