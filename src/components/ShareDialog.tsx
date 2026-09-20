@@ -1,7 +1,7 @@
 import { useEffect, useRef, useState } from 'react'
 import QRCode from 'qrcode'
 import { Copy, Download, Share2, X } from 'lucide-react'
-import { createInvite, getGrowth, revokeInvite, type AccountSession, type Growth } from '@/lib/account-api'
+import { createInvite, getGrowth, revokeInvite, GUEST_DAILY_LIMIT, type AccountSession, type Growth } from '@/lib/account-api'
 import { trackGrowthEvent, growthReason } from '@/lib/growth-analytics'
 
 async function renderCard(canvas: HTMLCanvasElement, url: string) {
@@ -19,7 +19,7 @@ async function renderCard(canvas: HTMLCanvasElement, url: string) {
   text('对话 · 朋友圈 · 场景模拟', 64, 364, 29)
   ctx.fillStyle = '#fff'; ctx.beginPath(); ctx.roundRect(60, 408, 680, 166, 24); ctx.fill()
   text('不用安装，打开就能创作', 90, 466, 28, '#163b2b', 700)
-  text('每日 10 次免费导出', 90, 512, 25)
+  text(`每日 ${GUEST_DAILY_LIMIT} 次免费导出`, 90, 512, 25)
   text('验证注册，再领 20 次奖励', 90, 548, 25, '#086943')
   const qr = document.createElement('canvas')
   await QRCode.toCanvas(qr, url, { width: 240, margin: 2, errorCorrectionLevel: 'M', color: { dark: '#163b2b', light: '#ffffff' } })

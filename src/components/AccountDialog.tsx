@@ -1,6 +1,6 @@
 import { useCallback, useEffect, useRef, useState } from 'react'
 import { CreditCard, LogOut, ShieldCheck, UserRound, X } from 'lucide-react'
-import { AccountApiError, getRewards, requestEmailCode, resetAccountPassword, type AccountSession, type Reward } from '@/lib/account-api'
+import { AccountApiError, GUEST_DAILY_LIMIT, getRewards, requestEmailCode, resetAccountPassword, type AccountSession, type Reward } from '@/lib/account-api'
 import { emailValidationMessage } from '@/lib/email-validation'
 import { trackGrowthEvent } from '@/lib/growth-analytics'
 import { Button } from './ui/button'
@@ -138,7 +138,7 @@ export function AccountDialog({ open, session, busy, error, onClose: closeParent
         <p className="account-security"><ShieldCheck size={15} /> 创作内容留在本机，账号同步邮箱和额度。</p>
         <button className="account-secondary-button" type="button" disabled={locked} onClick={() => void onLogout()}><LogOut size={15} /> 退出登录</button>
       </> : <>
-        <p className="account-intro">{mode === 'login' ? '首次使用请先注册。已注册账号使用邮箱和密码登录。' : mode === 'reset' ? '仅向已注册并验证的邮箱发送重置验证码；没有注册过，请先注册。' : '每日 10 次免费导出，验证邮箱完成注册后额外赠 20 次。'}</p>
+        <p className="account-intro">{mode === 'login' ? '首次使用请先注册。已注册账号使用邮箱和密码登录。' : mode === 'reset' ? '仅向已注册并验证的邮箱发送重置验证码；没有注册过，请先注册。' : `每日 ${GUEST_DAILY_LIMIT} 次免费导出，验证邮箱完成注册后额外赠 20 次。`}</p>
         <div className="account-tabs"><button className={mode === 'login' ? 'is-active' : ''} disabled={locked} type="button" onClick={() => changeMode('login')}>登录</button><button className={mode === 'register' ? 'is-active' : ''} disabled={locked} type="button" onClick={() => changeMode('register')}>注册</button></div>
         <form className="account-form" onSubmit={event => void submit(event)}>
           {mode === 'register' && <label>昵称<input autoComplete="nickname" value={displayName} disabled={locked} onChange={event => setDisplayName(event.target.value)} required maxLength={32} /></label>}

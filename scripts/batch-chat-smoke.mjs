@@ -33,7 +33,7 @@ try {
   await page.getByRole('button', { name: '导出所选 ZIP', exact: true }).click()
   await (await waiter).saveAs(`${output}/batch-chat.zip`)
   await page.getByText('已完成 3 / 3 组', { exact: true }).waitFor({ timeout: 45000 })
-  assert.equal(await quota.innerText(), '可用 7 次')
+  assert.equal(await quota.innerText(), '可用 99997 次')
   assert.equal(await page.getByLabel('当前组聊天名称').isDisabled(), true)
   assert.equal(await exportMode.isDisabled(), true)
   await batch.getByRole('tab', { name: '头像与角色', exact: true }).click()
@@ -48,7 +48,7 @@ try {
   await (await waiter).saveAs(`${output}/batch-chat.zip`)
   waiter = page.waitForEvent('download')
   await page.getByRole('button', { name: '重新下载已完成 ZIP' }).click(); await waiter
-  assert.equal(await quota.innerText(), '可用 7 次')
+  assert.equal(await quota.innerText(), '可用 99997 次')
   await nav.getByRole('link', { name: /朋友圈生成器/ }).click()
   await nav.getByRole('link', { name: /批量聊天图/ }).click()
   assert.equal(await page.locator('.batch-status-done').count(), 3)
@@ -77,7 +77,7 @@ try {
   await confirmQuota.check()
   await page.getByRole('button', { name: '重试并导出 ZIP' }).click()
   await page.getByRole('status').filter({ hasText: '本次没有可下载的图片' }).waitFor()
-  assert.equal(await quota.innerText(), '可用 7 次')
+  assert.equal(await quota.innerText(), '可用 99997 次')
   // A failed item is editable and can complete after applying its corrected source.
   await batch.getByRole('button', { name: '编辑内容', exact: true }).click()
   await page.getByLabel('本组聊天记录').fill('我：修正后的内容\n小林：可以重新生成了')
@@ -88,7 +88,7 @@ try {
   await page.getByRole('button', { name: '导出所选 ZIP', exact: true }).click()
   await waiter
   await page.getByText('已完成 4 / 4 组', { exact: true }).waitFor({ timeout: 45000 })
-  assert.equal(await quota.innerText(), '可用 6 次')
+  assert.equal(await quota.innerText(), '可用 99996 次')
   assert.deepEqual(errors, [])
   // Regression: the original single-chat screenshot still works through the shared helper.
   await page.setViewportSize({ width: 1440, height: 1000 })
@@ -129,5 +129,5 @@ try {
   assert.equal(single.subarray(1, 4).toString(), 'PNG')
   assert.equal(single.readUInt32BE(16), 1125)
   assert.equal(single.readUInt32BE(20), 2436)
-  console.log(JSON.stringify({ passed: true, dimensions, guestRemainingAfterBatch: 7, repeatedZipNoDebit: true, dirtyChatNoDebit: true, correctedRetryRemaining: 6, fixedPreview: true, isolatedCopy: true, customSelectKeyboard: true, clearConfirmation: true, singleImageDimensions: [1125, 2436], errors }))
+  console.log(JSON.stringify({ passed: true, dimensions, guestRemainingAfterBatch: 99997, repeatedZipNoDebit: true, dirtyChatNoDebit: true, correctedRetryRemaining: 99996, fixedPreview: true, isolatedCopy: true, customSelectKeyboard: true, clearConfirmation: true, singleImageDimensions: [1125, 2436], errors }))
 } finally { await browser.close() }

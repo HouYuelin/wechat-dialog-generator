@@ -1,4 +1,5 @@
 import { Disclosure } from './ui/controls';
+import { GUEST_DAILY_LIMIT } from '@/lib/account-api';
 import {
   ArrowUpRight,
   BookOpen,
@@ -91,7 +92,7 @@ export function GrowthContent({ onUseTemplate, onOpenEditor }: GrowthContentProp
           <div>
             <span className="growth-eyebrow"><BookOpen size={14} /> 使用教程</span>
             <h2>三步生成清晰的微信聊天截图</h2>
-            <p>无需注册即可开始制作，游客每日可免费导出 10 次，整个制作过程都在当前浏览器中完成。</p>
+            <p>无需注册即可开始制作，游客每日可免费导出 {GUEST_DAILY_LIMIT} 次，整个制作过程都在当前浏览器中完成。</p>
           </div>
         </div>
         <ol className="guide-grid">
@@ -105,7 +106,7 @@ export function GrowthContent({ onUseTemplate, onOpenEditor }: GrowthContentProp
         <div className="trust-copy">
           <span className="growth-eyebrow"><ShieldCheck size={14} /> 干净、私密、无干扰</span>
           <h2>聊天内容不需要离开你的设备</h2>
-          <p>对话解析、头像处理和图片生成均在浏览器本地完成。游客无需登录即可使用，每日可免费导出 10 次；聊天内容和生成图片不会上传。</p>
+          <p>对话解析、头像处理和图片生成均在浏览器本地完成。游客无需登录即可使用，每日可免费导出 {GUEST_DAILY_LIMIT} 次；聊天内容和生成图片不会上传。</p>
           <div className="trust-list">
             <span><LockKeyhole size={16} /> 本地处理</span>
             <span><Laptop size={16} /> 无需安装</span>
@@ -127,7 +128,7 @@ export function GrowthContent({ onUseTemplate, onOpenEditor }: GrowthContentProp
           </div>
         </div>
         <div className="faq-grid">
-          <Disclosure title="需要下载软件或注册账号吗？"><p>不需要下载软件或强制注册。游客打开页面即可制作，每日可免费导出 10 次；登录后可保存账户额度并领取公众号奖励。</p></Disclosure>
+          <Disclosure title="需要下载软件或注册账号吗？"><p>不需要下载软件或强制注册。游客打开页面即可制作，每日可免费导出 {GUEST_DAILY_LIMIT} 次；登录后可保存账户额度并领取公众号奖励。</p></Disclosure>
           <Disclosure title="聊天内容和头像会上传吗？"><p>不会。内容解析、头像预览和截图生成均在浏览器本地完成，站点只记录匿名访问、创建和导出事件。</p></Disclosure>
           <Disclosure title="可以生成多人群聊和长截图吗？"><p>可以。导入三位及以上参与者会自动形成群聊标题，也可以导出包含完整对话的长截图。</p></Disclosure>
           <Disclosure title="生成的图片适合哪些场景？"><p>适合内容创作、产品原型、教学演示和剧情分镜。请明确标注模拟内容，避免用于误导、冒充或欺诈。</p></Disclosure>
@@ -135,7 +136,7 @@ export function GrowthContent({ onUseTemplate, onOpenEditor }: GrowthContentProp
       </div>
 
       <div className="growth-footer">
-        <span><Download size={15} /> 每日免费 10 次 · 无弹窗广告</span>
+        <span><Download size={15} /> 每日免费 {GUEST_DAILY_LIMIT} 次 · 无弹窗广告</span>
         <span>本工具与微信官方无关联，仅用于合法的创作、教学和设计演示。</span>
       </div>
     </section>

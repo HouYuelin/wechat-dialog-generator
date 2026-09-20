@@ -7,6 +7,8 @@ const apiRoot = import.meta.env.VITE_ACCOUNT_API_ENDPOINT ||
 
 const tokenStorageKey = 'wechat-dialog-generator:account-token'
 const guestUsageStorageKey = 'wechat-dialog-generator:guest-export-usage'
+/** Guest (not signed in) free export allowance per local day. */
+export const GUEST_DAILY_LIMIT = 100000
 const authenticatedCredentials = new Map<string, string>()
 export type ExportIdentity = { userId: string | null; credential: string }
 export function captureExportIdentity(session: AccountSession | null): ExportIdentity {
@@ -224,18 +226,18 @@ export function guestQuota(): ExportQuota {
   let used = 0
   try {
     const stored = JSON.parse(localStorage.getItem(guestUsageStorageKey) ?? '{}') as { day?: string; used?: number }
-    if (stored.day === day) used = Math.max(0, Math.min(10, Number(stored.used) || 0))
+    if (stored.day === day) used = Math.max(0, Math.min(GUEST_DAILY_LIMIT, Number(stored.used) || 0))
   } catch {
     used = 0
   }
   const tomorrow = new Date()
   tomorrow.setHours(24, 0, 0, 0)
   return {
-    daily_limit: 10,
+    daily_limit: GUEST_DAILY_LIMIT,
     daily_used: used,
-    daily_remaining: 10 - used,
+    daily_remaining: GUEST_DAILY_LIMIT - used,
     bonus_remaining: 0,
-    total_remaining: 10 - used,
+    total_remaining: GUEST_DAILY_LIMIT - used,
     resets_at: tomorrow.toISOString(),
   }
 }
@@ -243,7 +245,7 @@ export function guestQuota(): ExportQuota {
 export function consumeGuestExport() {
   const current = guestQuota()
   if (current.daily_remaining <= 0) {
-    throw new AccountApiError(402, 'quota_exhausted', '今日 10 次免费导出额度已用完，登录后可继续领取额度')
+    throw new AccountApiError(402, 'quota_exhausted', `今日 ${GUEST_DAILY_LIMIT} 次免费导出额度已用完，登录后可继续领取额度`)
   }
   const next = current.daily_used + 1
   localStorage.setItem(guestUsageStorageKey, JSON.stringify({ day: localDay(), used: next }))
