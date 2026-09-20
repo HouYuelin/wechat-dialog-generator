@@ -106,6 +106,8 @@ export function ImportPanel({ text, onTextChange, onImport }: ImportPanelProps) 
           placeholder="在此粘贴聊天记录文本，或点击上方按钮导入文件..."
         />
 
+        <small className="form-help">下方「添加消息」新增的消息会按同样的格式追加到这段文本末尾，可以在这里继续改写；改完点「解析并导入」即按文本重建整份对话。图片消息只写 [图片] 标记，重新解析后可以点图片从素材库再选一张。</small>
+
         <div style={{ display: 'flex', gap: 8, alignItems: 'center' }}>
           <Button className="btn btn-primary" onClick={onImport} disabled={!text.trim()}>
             解析并导入

@@ -260,6 +260,9 @@
 .chat-playback-field .ui-segmented-control { min-width: 0; }
 .chat-playback-field .ui-segmented-item { min-height: 27px; padding: 0 7px; font-size: 11px; white-space: nowrap; }
 .chat-playback-hint { min-width: 0; font-size: 10px; line-height: 1.5; color: #6b8577; }
+/* 「我的音频」音源下收/发各自的选音效按钮：占位小、名字长了省略，不把面板撑开。 */
+.chat-playback-pick-sound { min-width: 0; max-width: 150px; height: 24px; padding: 0 8px; font-size: 11px; overflow: hidden; }
+.chat-playback-pick-sound { display: inline-flex; align-items: center; gap: 4px; text-overflow: ellipsis; white-space: nowrap; }
 .chat-playback-note { font-size: 10px; line-height: 1.7; color: var(--studio-muted); }
 .chat-export-primary-row { display: grid; grid-template-columns: repeat(2, minmax(0, 1fr)); gap: 6px; }
 
@@ -312,6 +315,9 @@
 .video-option-note { margin-top: 6px; font-size: 10px; line-height: 1.7; color: var(--studio-muted); }
 .video-sound-row { display: flex; align-items: center; gap: 10px; flex-wrap: wrap; }
 .video-sound-row .ui-segmented-control { width: auto; }
+.video-duration-row { display: flex; align-items: center; gap: 14px; }
+.video-duration-row .ui-slider { flex: 1; min-width: 0; }
+.video-duration-value { flex-shrink: 0; min-width: 46px; text-align: right; font-size: 12px; font-weight: 600; color: #27543c; font-variant-numeric: tabular-nums; }
 .video-summary { margin-top: 18px; padding: 12px 14px; border-radius: 8px; background: #f3f9f5; font-size: 11px; line-height: 1.9; color: #42604f; }
 .video-summary b { color: #27543c; }
 .video-dialog-actions { display: grid; grid-template-columns: auto minmax(0, 1fr); gap: 8px; margin-top: 18px; }

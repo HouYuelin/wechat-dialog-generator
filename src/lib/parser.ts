@@ -27,8 +27,17 @@ function parseSpecialContent(content: string): { type: MessageType; content: str
   // [转账]金额 或 [转账]金额:备注
   m = content.match(TRANSFER_REG);
   if (m) {
-    const parts = (m[1] || '0').split(/[:：]/);
-    return { type: 'transfer', content: '', params: { amount: parts[0] || '0', remark: parts[1] || '转账' } };
+    // 只按第一个冒号切：备注里再出现冒号（「还你的，备注：带冒号」）不该被当成第三段丢掉。
+    const raw = m[1] || '0';
+    const split = raw.search(/[:：]/);
+    return {
+      type: 'transfer',
+      content: '',
+      params: {
+        amount: (split < 0 ? raw : raw.slice(0, split)) || '0',
+        remark: (split < 0 ? '' : raw.slice(split + 1)) || '转账',
+      },
+    };
   }
   // [语音]秒数 或 [语音]秒数:转写内容
   m = content.match(VOICE_REG);
@@ -209,6 +218,55 @@ export function parseChatRecord(text: string): ParseResult {
   });
 
   return { users, messages };
+}
+
+/** 解析按行切，文本消息里带换行会被拆成两条，所以写回时压成一行。 */
+function oneLine(value: string) {
+  return value.replace(/\s*\r?\n\s*/g, ' ').trim();
+}
+
+/**
+ * 记录文本里的图片只写 `[图片]` 标记，不写本地 data URL：
+ * 一张压缩过的图也有几十万字符，塞进输入框会直接卡住。
+ */
+function recordImageContent(content: string) {
+  const url = content.trim();
+  if (!url || url.startsWith('data:') || url.includes('placeholder')) return '[图片]';
+  return `[图片]${url}`;
+}
+
+/**
+ * 把一条消息写回聊天记录的文本格式。规则与上面那组正则一一对应，
+ * 所以「写回文本 → 再解析」得到的是同一条消息（见 parser.test.ts 的回环用例）。
+ *
+ * 加消息的时候顺手把它追加到导入框里：文本是用户唯一能改到消息的地方，
+ * 只存进 messages 的话，这条新加的消息就再也改不动了。
+ */
+export function messageToRecordLine(msg: Omit<ChatMessage, 'id'>, senderName: string): string {
+  // 时间节点是居中提示，记录里不带发送人。
+  if (msg.type === 'time') return `**【${oneLine(msg.content)}】**`;
+
+  const head = `**${oneLine(senderName) || '我'}**：`;
+  if (msg.type === 'image') return head + recordImageContent(msg.content);
+  if (msg.type === 'redpacket') return head + `[红包]${oneLine(msg.params.remark || '恭喜发财，大吉大利')}`;
+  if (msg.type === 'transfer') return head + `[转账]${oneLine(msg.params.amount || '0')}:${oneLine(msg.params.remark || '转账')}`;
+  if (msg.type === 'voice') {
+    // 解析端用 parseInt 取秒数，写不出数字就等于这条语音掉回普通文字，所以这里兜到 3 秒。
+    const duration = Number.isFinite(msg.params.duration) ? Math.max(1, Math.round(msg.params.duration as number)) : 3;
+    const transcript = msg.params.transcript ? oneLine(msg.params.transcript) : '';
+    return head + `[语音]${duration}${transcript ? `:${transcript}` : ''}`;
+  }
+  return head + oneLine(msg.content);
+}
+
+/**
+ * 新加的一条消息写回记录文本：接到末尾。原来文本是空的就只用这一行，
+ * 末尾多余的空行先削掉，免得连点几次「添加」就在文本里堆出一串空白。
+ */
+export function appendMessageToRecord(text: string, msg: Omit<ChatMessage, 'id'>, senderName: string): string {
+  const line = messageToRecordLine(msg, senderName);
+  const trimmed = text.replace(/\s+$/, '');
+  return trimmed ? `${trimmed}\n${line}` : line;
 }
 
 export const EXAMPLE_TEXT = `**【3月1日 14:32】**

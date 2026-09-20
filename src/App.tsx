@@ -10,6 +10,7 @@ import { ImportPanel } from '@/components/ImportPanel';
 import { UserAvatarManager } from '@/components/UserAvatarManager';
 import { MessageEditor } from '@/components/MessageEditor';
 import { MediaLibraryDialog } from '@/components/MediaLibraryDialog';
+import { SoundLibraryDialog } from '@/components/SoundLibraryDialog';
 import { SettingsPanel } from '@/components/SettingsPanel';
 import { PhonePreview } from '@/components/PhonePreview';
 import { GrowthContent } from '@/components/GrowthContent';
@@ -25,8 +26,8 @@ import { ExportLogPage } from '@/components/ExportLogPage';
 import { beginExportLog, exportLogError } from '@/lib/export-log';
 import { WorkspacePanels } from '@/components/WorkspacePanels';
 import { ChatPlaybackBar } from '@/components/ChatPlaybackBar';
-import { VideoExportDialog, VideoProgressOverlay } from '@/components/VideoExportDialog';
-import { renderChatFrames } from '@/components/chat-video-render';
+import { VideoExportDialog, VideoProgressOverlay, type VideoCaptureMode } from '@/components/VideoExportDialog';
+import { renderChatFrames, renderChatScrollFrame } from '@/components/chat-video-render';
 import {
   buildPlaybackTimeline,
   frameIndexAt,
@@ -37,8 +38,17 @@ import {
 } from '@/lib/chat-playback';
 import { pickVideoMimeType, videoContainerLabel, videoExportSupported, videoFileExtension, videoSizeOption, type VideoSizeId } from '@/lib/chat-video';
 import { defaultScreenSize, screenSizeLabel, type ScreenSize } from '@/lib/phone-size';
-import { recordChatVideo } from '@/lib/chat-video-recorder';
-import { loadNotifySoundFile, notifyAudioContext, playNotify, resumeNotifyAudio } from '@/lib/notify-sound';
+import { recordChatVideo, recordScrollingChatVideo } from '@/lib/chat-video-recorder';
+import { defaultScrollDurationSeconds, scrollVideoPlan } from '@/lib/chat-scroll-video';
+import { loadNotifySoundFile, notifyAudioContext, playNotify, resumeNotifyAudio, type NotifyCustomBuffers, type NotifyKind } from '@/lib/notify-sound';
+import {
+  addSoundAssets,
+  createSoundAsset,
+  removeSoundAsset,
+  renameSoundAsset,
+  touchSoundAsset,
+  type SoundAsset,
+} from '@/lib/sound-library';
 import { StudioLink, ToolHome } from '@/components/ToolHome';
 import { workspaceTools } from '@/lib/workspace-tools';
 import { readWorkspaceRoute, workspaceHref, type WorkspaceRoute } from '@/lib/workspace-route';
@@ -49,18 +59,32 @@ import {
   officialAccountId,
   type OfficialAccountPlacement,
 } from '@/components/OfficialAccountDialog';
-import { parseChatRecord } from '@/lib/parser';
-import { carryOverAvatars, carryOverSelfId } from '@/lib/user-avatars';
+import { appendMessageToRecord, parseChatRecord } from '@/lib/parser';
+import { avatarNameKey, carryOverAvatars, carryOverSelfId } from '@/lib/user-avatars';
+import {
+  applyPresetsToUsers,
+  removeAvatarPreset,
+  renameAvatarPreset,
+  rememberUserAvatars,
+  touchAvatarPreset,
+  type AvatarPreset,
+} from '@/lib/avatar-presets';
 import {
   activeProjectStorageKey,
   copyProject,
+  deleteAvatarPresetRecord,
   deleteMediaAssetRecord,
+  deleteSoundAssetRecord,
   deleteProject,
   listProjects,
+  loadAvatarPresets,
   loadMediaAssets,
+  loadSoundAssets,
   projectHasContent,
   projectName,
+  putAvatarPresets,
   putMediaAssets,
+  putSoundAssets,
   saveProject,
   type ChatProject,
   type ChatProjectSnapshot,
@@ -106,6 +130,9 @@ import { defaultImageMax } from '@/lib/image-size';
 import { defaultFontScale } from '@/lib/font-size';
 import type { ChatUser, ChatMessage, PhoneSettings } from '@/types';
 
+/** 背景图有两个用处：聊天背景写进手机样式，朋友圈封面写进朋友圈草稿。 */
+type BackgroundTarget = 'chat' | 'moments';
+
 const defaultSettings: PhoneSettings = {
   platform: 'ios',
   time: '12:02',
@@ -127,6 +154,14 @@ const defaultSettings: PhoneSettings = {
 interface MediaImportOutcome extends MediaImportSummary {
   /** 与传入文件顺序一致、可以直接用的素材（库里已有同图时复用旧记录）。 */
   picked: MediaAsset[];
+}
+
+/** 正在使用的自定义提示音：buffer 只在内存里，id 指回音效库记录（改名 / 删除时要跟着同步）。 */
+interface CustomSoundEntry {
+  id?: string
+  name: string
+  durationSeconds: number
+  buffer: AudioBuffer
 }
 
 function App() {
@@ -170,10 +205,18 @@ function App() {
   const [library, setLibrary] = useState<MediaAsset[]>([]);
   // 只有真的读出来了才放出口；浏览器不给 IndexedDB 时这几个入口整体隐藏。
   const [libraryReady, setLibraryReady] = useState(false);
+  // 用过的头像归档：按角色名长期留着，只增不删，换对话 / 重新导入 / 清空编辑器都不影响。
+  const [avatarPresets, setAvatarPresets] = useState<AvatarPreset[]>([]);
+  const [presetsReady, setPresetsReady] = useState(false);
   /** 「添加消息 → 图片」里选中的那张，放在这里是为了素材库和快捷条都能往里写。 */
   const [draftImage, setDraftImage] = useState<string | null>(null);
-  /** 素材库弹窗这次是为谁打开的：某位角色的头像 / 某条消息的图 / 只为待发送的草稿挑一张。 */
-  const [libraryPicker, setLibraryPicker] = useState<{ kind: MediaKind; userId?: number; msgId?: number; draft?: boolean } | null>(null);
+  /** 素材库弹窗这次是为谁打开的：某位角色的头像 / 某条消息的图 / 待发送的草稿 / 某一处背景。 */
+  const [libraryPicker, setLibraryPicker] = useState<{ kind: MediaKind; userId?: number; msgId?: number; draft?: boolean; background?: BackgroundTarget } | null>(null);
+  /**
+   * 朋友圈编辑器的封面在它自己的草稿里，弹窗却在 App 这边，所以「选一张封面」用一次性的
+   * Promise 接：调用方 await 到 data URL，中途关掉弹窗就拿到 null。同一时刻只可能有一个等待者。
+   */
+  const pendingBackgroundPick = useRef<((dataUrl: string | null) => void) | null>(null);
   const [toast, setToast] = useState('');
   // 定时发送播放与视频导出共用同一套节奏 / 提示音设置，保证预览里看到的速度就是导出的速度。
   const [playbackActive, setPlaybackActive] = useState(false);
@@ -188,12 +231,23 @@ function App() {
   useEffect(() => { revealedCountRef.current = revealedCount }, [revealedCount]);
   const [videoOpen, setVideoOpen] = useState(false);
   const [videoSize, setVideoSize] = useState<VideoSizeId>('vertical');
+  // 录制方式决定后面几项设置怎么用：逐条播放调出现节奏，滚动到底调视频总时长。
+  const [videoMode, setVideoMode] = useState<VideoCaptureMode>('flip');
+  const [scrollDuration, setScrollDuration] = useState(defaultScrollDurationSeconds);
   // 屏幕尺寸就是导出分辨率：图片、视频帧都按它渲染。
   const [screenSize, setScreenSize] = useState<ScreenSize>(defaultScreenSize);
   const [soundSource, setSoundSource] = useState<'synth' | 'custom'>('synth');
-  const [customSound, setCustomSound] = useState<{ name: string; durationSeconds: number; buffer: AudioBuffer } | null>(null);
+  // 自定义提示音按收/发各存一条：收到替换「叮咚」，发送替换「咻」，互不影响。
+  // buffer 不可序列化，只留内存；音效库里存的是可持久化的 data URL（见 SoundAsset）。
+  const [customSounds, setCustomSounds] = useState<{ received: CustomSoundEntry | null; sent: CustomSoundEntry | null }>({ received: null, sent: null });
   const [soundError, setSoundError] = useState('');
-  const [videoProgress, setVideoProgress] = useState<{ stage: 'render' | 'record'; current: number; total: number; elapsedMs: number; totalMs: number } | null>(null);
+  // 音效库：上传过的自定义提示音长期留着，换对话、重新导入都不影响。
+  const [soundLibrary, setSoundLibrary] = useState<SoundAsset[]>([]);
+  const [soundLibraryReady, setSoundLibraryReady] = useState(false);
+  const [soundLibraryOpen, setSoundLibraryOpen] = useState(false);
+  // 这次从音效库挑音效是给谁用的：收到那一声还是发送那一声。
+  const [soundPickTarget, setSoundPickTarget] = useState<NotifyKind>('received');
+  const [videoProgress, setVideoProgress] = useState<{ stage: 'render' | 'record'; current: number; total: number; elapsedMs: number; totalMs: number; renderHint?: string } | null>(null);
   const videoToken = useRef({ cancelled: false });
   const [projects, setProjects] = useState<ChatProject[]>([]);
   const [activeProjectId, setActiveProjectId] = useState<string | null>(null);
@@ -235,7 +289,8 @@ function App() {
     void trackProductEvent('tool_selected', { tool: activeTool });
   }, [activeTool, isWorking]);
 
-  // 素材库独立于项目：换项目、重新导入、清空编辑器都不该影响它，所以单独读一次。
+  // 素材库、头像归档和音效库都独立于项目：换项目、重新导入、清空编辑器都不该影响它们，所以各自单独读一次。
+  // 各读各的，一边失败不拖累另一边（读不出来就只藏掉对应的入口，编辑和导出照常可用）。
   useEffect(() => {
     if (!('indexedDB' in window)) return;
     let cancelled = false;
@@ -243,11 +298,32 @@ function App() {
       if (cancelled) return;
       setLibrary(assets);
       setLibraryReady(true);
-    }).catch(() => {
-      // 读不出来就不放出素材库入口，编辑和导出照常可用。
-    });
+    }).catch(() => {});
+    void loadAvatarPresets().then(presets => {
+      if (cancelled) return;
+      setAvatarPresets(presets);
+      setPresetsReady(true);
+    }).catch(() => {});
+    void loadSoundAssets().then(assets => {
+      if (cancelled) return;
+      setSoundLibrary(assets);
+      setSoundLibraryReady(true);
+    }).catch(() => {});
     return () => { cancelled = true; };
   }, []);
+
+  /**
+   * 记档：只要某位角色身上挂着头像，就把「角色名 + 头像」写进归档。
+   * 这里只增不删——取消头像、换一张新的、角色离开对话都不会清掉记录，
+   * 删除只发生在用户点「用过的头像」里那个删除按钮的时候。
+   */
+  useEffect(() => {
+    if (!presetsReady || !users.length) return;
+    const { list, changed } = rememberUserAvatars(avatarPresets, users);
+    if (!changed.length) return;
+    setAvatarPresets(list);
+    void putAvatarPresets(changed).catch(() => {});
+  }, [avatarPresets, presetsReady, users]);
 
   useEffect(() => {
     let cancelled = false;
@@ -738,7 +814,11 @@ function App() {
     }
     // 重新解析会把用户 id 从 1 重排，所以按名字续上之前上传的头像和自己身份，
     // 别让用户每换一段聊天记录就重传一次头像。
-    const nextUsers = carryOverAvatars(result.users, users, selfId);
+    const carriedOver = carryOverAvatars(result.users, users, selfId);
+    // 上一轮对话里没有的角色（换过草稿、换过聊天记录）再从归档里找一遍，
+    // 归档比当前编辑状态活得久，这才是「我用过的头像都还在」的那一层。
+    const restored = applyPresetsToUsers(carriedOver, avatarPresets);
+    const nextUsers = restored.users;
     const carried = nextUsers.filter((user, index) => !result.users[index].avatar && user.avatar).length;
     setUsers(nextUsers);
     setMessages(result.messages);
@@ -755,8 +835,9 @@ function App() {
       setSettings(s => ({ ...s, contactName: result.users[0].name }));
     }
     const kept = carried > 0 ? `，已沿用 ${carried} 个头像` : '';
-    showToast(`成功导入 ${result.messages.length} 条消息（${result.users.length} 个用户）${kept}`);
-  }, [importText, selfId, showToast, users]);
+    const fromArchive = restored.applied > 0 ? `，其中 ${restored.applied} 个来自用过的头像` : '';
+    showToast(`成功导入 ${result.messages.length} 条消息（${result.users.length} 个用户）${kept}${fromArchive}`);
+  }, [avatarPresets, importText, selfId, showToast, users]);
 
   const handleUpdateAvatar = useCallback((userId: number, avatar: string) => {
     setUsers(prev => prev.map(u => u.id === userId ? { ...u, avatar } : u));
@@ -765,6 +846,54 @@ function App() {
   const handleRemoveAvatar = useCallback((userId: number) => {
     setUsers(prev => prev.map(u => u.id === userId ? { ...u, avatar: null } : u));
   }, []);
+
+  // ===================== 用过的头像（归档） =====================
+  // 归档里的一条是「某个名字用过的某张头像」。它能做的只有两件事：还给同名的那位角色，
+  // 或者被手动删掉。取消头像、换新头像都不会动它，所以用户的头像不会莫名其妙消失。
+
+  /** 把归档里的头像还给同名的角色；这个角色不在当前对话里就只记一次使用，不做别的。 */
+  const handleUsePreset = useCallback((preset: AvatarPreset) => {
+    const owner = users.find(user => avatarNameKey(user.name) === avatarNameKey(preset.name));
+    if (!owner) {
+      showToast(`当前对话里没有「${preset.name}」这个角色，这张头像先留在用过的头像里。`);
+      return;
+    }
+    const tapped = touchAvatarPreset(avatarPresets, preset.id);
+    if (tapped !== avatarPresets) {
+      setAvatarPresets(tapped);
+      const touched = tapped.find(item => item.id === preset.id);
+      if (touched) void putAvatarPresets([touched]).catch(() => {});
+    }
+    setUsers(prev => prev.map(user => user.id === owner.id ? { ...user, avatar: preset.avatar } : user));
+    showToast(`已为「${owner.name}」换上这张头像。`);
+  }, [avatarPresets, showToast, users]);
+
+  const handleRemovePreset = useCallback((preset: AvatarPreset) => {
+    setAvatarPresets(prev => removeAvatarPreset(prev, preset.id));
+    void deleteAvatarPresetRecord(preset.id).catch(() => {});
+    showToast(`已从用过的头像里删除「${preset.name}」，对话里已经用上的头像不受影响。`);
+  }, [showToast]);
+
+  /**
+   * 给归档里的一条改名。名字就是这套归档的键，所以改名等于把它重新归到新名字下：
+   * 主键跟着一起换，旧的那一行必须删掉，否则库里会留下一条同名同头像的孤儿。
+   */
+  const handleRenamePreset = useCallback((preset: AvatarPreset, name: string) => {
+    const result = renameAvatarPreset(avatarPresets, preset.id, name);
+    if (result.error) {
+      showToast(result.error);
+      return false;
+    }
+    // 只差空白或大小写：当没改，不写库也不提示。
+    if (!result.preset) return true;
+    setAvatarPresets(result.list);
+    if (result.previousId) void deleteAvatarPresetRecord(result.previousId).catch(() => {});
+    void putAvatarPresets([result.preset]).catch(() => {});
+    // 旧名字还在当前对话里的话，同步那一遍会照旧给它记一条——这不是 bug，先说清楚。
+    const stillInChat = users.some(user => avatarNameKey(user.name) === avatarNameKey(preset.name));
+    showToast(`已把「${preset.name}」改名为「${result.preset.name}」。${stillInChat ? `当前对话里还有一位叫「${preset.name}」的角色，它用着的头像会照旧另记一条。` : ''}`);
+    return true;
+  }, [avatarPresets, showToast, users]);
 
   const handleUpdateMessage = useCallback((msgId: number, content: string) => {
     setMessages(prev => prev.map(m => m.id === msgId ? { ...m, content } : m));
@@ -775,7 +904,12 @@ function App() {
       const maxId = prev.reduce((max, m) => Math.max(max, m.id), 0);
       return [...prev, { ...msg, id: maxId + 1 }];
     });
-  }, []);
+    // 同时把这一条按记录格式写回导入框。文本是唯一能改到消息的地方
+    // （预览里只支持换图），只存进 messages 的话，这条新消息就再也没法改了。
+    const senderName = users.find(user => user.id === msg.senderId)?.name ?? users[0]?.name;
+    if (!senderName) return;
+    setImportText(prev => appendMessageToRecord(prev, msg, senderName));
+  }, [users]);
 
   // ===================== 素材库 =====================
   // 上传过的头像和图片都要留在素材库里，所以读文件这件事统一走这里：
@@ -791,7 +925,7 @@ function App() {
         failed += 1;
       }
     }
-    const { library: next, added, duplicated, evicted } = addMediaAssets(library, picked);
+    const { library: next, added, duplicated, rejected } = addMediaAssets(library, picked);
     // 库里已经有同一张图时复用旧记录，不然选中的素材会是一条库里不存在的“影子”。
     const usable = picked.map(item => added.find(asset => asset.dataUrl === item.dataUrl) ?? findAssetByDataUrl(next, item.dataUrl) ?? item);
     if (next !== library) {
@@ -801,10 +935,10 @@ function App() {
       if (libraryReady) void putMediaAssets(added).catch(() => showToast('素材库保存失败（可能是浏览器存储空间不足），本次图片仍可正常使用。'));
     }
     if (added.length) void trackProductEvent('media_assets_imported', { kind, count: String(added.length) });
-    return { picked: usable, added: added.length, duplicated, failed, evicted };
+    return { picked: usable, added: added.length, duplicated, failed, rejected };
   }, [library, libraryReady, showToast]);
 
-  /** 记一次使用：只为了让它在快捷条里排前面，顺便影响超上限时的淘汰顺序。 */
+  /** 记一次使用：只为了让它在快捷条里排前面，不影响库里的任何一条素材。 */
   const markAssetUsed = useCallback((id: string) => {
     const next = touchMediaAsset(library, id);
     if (next === library) return;
@@ -826,6 +960,22 @@ function App() {
       showToast('这张图片读取失败，请换一张。');
       return null;
     }
+    return asset.dataUrl;
+  }, [importMedia, showToast]);
+
+  /**
+   * 读一张背景图并入库，返回可直接用的 data URL。聊天背景和朋友圈封面共用这一个入口，
+   * 所以「上传过一次，下次还能从素材库点选」对两处都成立。
+   */
+  const uploadBackgroundFile = useCallback(async (file: File) => {
+    const outcome = await importMedia([file], 'background');
+    const asset = outcome.picked[0];
+    if (!asset) {
+      showToast('这张背景图读取失败，请换一张。');
+      return null;
+    }
+    // 入库失败只可能是这一类到上限了，如实说一声；正常入库不打扰。
+    if (outcome.rejected) showToast('素材库的背景图已到上限，这张没能存进去（可先删几张再传），本次仍可直接使用。');
     return asset.dataUrl;
   }, [importMedia, showToast]);
 
@@ -852,9 +1002,48 @@ function App() {
     if (assigned) parts.push(`按顺序换上 ${assigned} 位角色的头像`);
     if (outcome.picked.length > assigned) parts.push(`多出的 ${outcome.picked.length - assigned} 张已存进素材库`);
     if (outcome.duplicated) parts.push(`其中 ${outcome.duplicated} 张库里已有`);
+    if (outcome.rejected) parts.push(`${outcome.rejected} 张超出每类上限未入库`);
     if (outcome.failed) parts.push(`${outcome.failed} 张读取失败`);
     showToast(`${parts.join('，')}。`);
   }, [importMedia, showToast, users]);
+
+  /** 关掉素材库弹窗。还等着选背景的调用方必须收到 null，否则那个 await 会一直挂着。 */
+  const closeLibraryPicker = useCallback(() => {
+    const resolve = pendingBackgroundPick.current;
+    pendingBackgroundPick.current = null;
+    setLibraryPicker(null);
+    resolve?.(null);
+  }, []);
+
+  const openBackgroundLibrary = useCallback((target: BackgroundTarget) => {
+    setLibraryPicker({ kind: 'background', background: target });
+  }, []);
+
+  /**
+   * 给朋友圈编辑器用的「选一张封面」：打开素材库，选中的图通过 Promise 回传。
+   * 连点两次时先把上一个等待者兑现成 null，避免前一个 await 永远不结束。
+   */
+  const pickMomentCover = useCallback(() => new Promise<string | null>(resolve => {
+    pendingBackgroundPick.current?.(null);
+    pendingBackgroundPick.current = resolve;
+    setLibraryPicker({ kind: 'background', background: 'moments' });
+  }), []);
+
+  /** 把一张素材用成背景。聊天背景直接写进手机样式，朋友圈封面交给等着的那位调用方。 */
+  const applyBackground = useCallback((target: BackgroundTarget, asset: MediaAsset) => {
+    markAssetUsed(asset.id);
+    if (target === 'chat') {
+      setSettings(current => ({ ...current, backgroundImage: asset.dataUrl }));
+      closeLibraryPicker();
+      showToast(`聊天背景已换成「${asset.name}」`);
+      return;
+    }
+    const resolve = pendingBackgroundPick.current;
+    pendingBackgroundPick.current = null;
+    closeLibraryPicker();
+    resolve?.(asset.dataUrl);
+    showToast(`朋友圈背景已换成「${asset.name}」`);
+  }, [closeLibraryPicker, markAssetUsed, showToast]);
 
   /**
    * 素材库弹窗里的批量上传。只传了一张、又明确知道是给谁用的时候直接换上，
@@ -867,51 +1056,57 @@ function App() {
       const asset = outcome.picked[0];
       if (target.userId !== undefined && kind === 'avatar') {
         applyAvatar(target.userId, asset);
-        setLibraryPicker(null);
+        closeLibraryPicker();
       } else if (target.msgId !== undefined && kind === 'sticker') {
         handleUpdateMessage(target.msgId, asset.dataUrl);
         markAssetUsed(asset.id);
-        setLibraryPicker(null);
+        closeLibraryPicker();
       } else if (target.draft && kind === 'sticker') {
         setDraftImage(asset.dataUrl);
         markAssetUsed(asset.id);
-        setLibraryPicker(null);
+        closeLibraryPicker();
+      } else if (target.background && kind === 'background') {
+        applyBackground(target.background, asset);
       }
     }
     return outcome;
-  }, [applyAvatar, handleUpdateMessage, importMedia, libraryPicker, markAssetUsed]);
+  }, [applyAvatar, applyBackground, closeLibraryPicker, handleUpdateMessage, importMedia, libraryPicker, markAssetUsed]);
 
   const handlePickFromLibrary = useCallback((asset: MediaAsset) => {
     const target = libraryPicker;
     if (target?.userId !== undefined && asset.kind === 'avatar') {
       applyAvatar(target.userId, asset);
-      setLibraryPicker(null);
+      closeLibraryPicker();
       showToast(`已换上「${asset.name}」`);
       return;
     }
     if (target?.msgId !== undefined && asset.kind === 'sticker') {
       handleUpdateMessage(target.msgId, asset.dataUrl);
       markAssetUsed(asset.id);
-      setLibraryPicker(null);
+      closeLibraryPicker();
       showToast('这条消息的图片已更换');
       return;
     }
     if (target?.draft && asset.kind === 'sticker') {
       setDraftImage(asset.dataUrl);
       markAssetUsed(asset.id);
-      setLibraryPicker(null);
+      closeLibraryPicker();
       showToast('已放入待添加的图片');
+      return;
+    }
+    if (target?.background && asset.kind === 'background') {
+      applyBackground(target.background, asset);
       return;
     }
     // 从「素材库」入口进来、没有具体目标时，只是记一次使用。
     markAssetUsed(asset.id);
-  }, [applyAvatar, handleUpdateMessage, libraryPicker, markAssetUsed, showToast]);
+  }, [applyAvatar, applyBackground, closeLibraryPicker, handleUpdateMessage, libraryPicker, markAssetUsed, showToast]);
 
   const handleRemoveAsset = useCallback((asset: MediaAsset) => {
     setLibrary(prev => removeMediaAsset(prev, asset.id));
     void deleteMediaAssetRecord(asset.id).catch(() => {});
-    // 已经用上的头像和图片是抄进项目里的副本，删素材不会把它从对话里抹掉。
-    showToast(`已从素材库删除「${asset.name}」，用上的头像与图片不受影响。`);
+    // 已经用上的头像、图片和背景是抄进项目里的副本，删素材不会把它从对话里抹掉。
+    showToast(`已从素材库删除「${asset.name}」，用上的头像、图片与背景不受影响。`);
   }, [showToast]);
 
   const handleRenameAsset = useCallback((asset: MediaAsset, name: string) => {
@@ -944,6 +1139,8 @@ function App() {
   const videoSupported = videoExportSupported();
   const videoTooLong = messages.length > maxVideoMessages;
   const videoContainer = videoSupported ? videoContainerLabel(pickVideoMimeType(type => MediaRecorder.isTypeSupported(type))) : '不支持';
+  // 滚动视频的时间轴只跟用户设的时长有关，与消息条数无关，所以单独算一份。
+  const scrollPlan = useMemo(() => scrollVideoPlan(scrollDuration * 1000), [scrollDuration]);
 
   const unlockAudio = useCallback(() => {
     // 浏览器要求音频上下文在用户手势里解锁，否则播放和录制都会是静音。
@@ -964,8 +1161,10 @@ function App() {
     if (audio) void resumeNotifyAudio(audio);
     const pending = notifyAt.filter(event => event.atMs > offsetMs);
     const remaining = Math.max(0, timeline.totalMs - offsetMs);
-    // 上传过自定义提示音时，预览播放也用同一个音源，保证录屏和导出视频听感一致。
-    const soundBuffer = soundSource === 'custom' ? customSound?.buffer ?? null : null;
+    // 上传过自定义提示音时，预览播放也用同一套音源（收/发各自替换），保证录屏和导出视频听感一致。
+    const soundBuffers: NotifyCustomBuffers = soundSource === 'custom'
+      ? { received: customSounds.received?.buffer ?? null, sent: customSounds.sent?.buffer ?? null }
+      : {};
     let notified = 0;
     let lastIndex = -1;
     let handle = requestAnimationFrame(function tick() {
@@ -977,7 +1176,7 @@ function App() {
         setRevealedCount(index);
       }
       while (notified < pending.length && pending[notified].atMs - offsetMs <= elapsed) {
-        playNotify(pending[notified].kind, audio, { buffer: soundBuffer });
+        playNotify(pending[notified].kind, audio, { buffers: soundBuffers });
         notified += 1;
       }
       if (elapsed >= remaining) {
@@ -988,7 +1187,7 @@ function App() {
       handle = requestAnimationFrame(tick);
     });
     return () => cancelAnimationFrame(handle);
-  }, [playbackPlaying, playbackTimeline, notifyAt, soundEnabled, soundSource, customSound]);
+  }, [playbackPlaying, playbackTimeline, notifyAt, soundEnabled, soundSource, customSounds]);
 
   useEffect(() => {
     if (!playbackActive) return;
@@ -1027,19 +1226,99 @@ function App() {
   }, [messages.length]);
 
   // ===================== 视频导出 =====================
-  const handleSoundFile = useCallback(async (file: File) => {
+  // 直接上传音频：kind 决定这次传的是收到音还是发送音。
+  const handleSoundFile = useCallback(async (file: File, kind: NotifyKind) => {
     setSoundError('');
     const context = unlockAudio();
     if (!context) { setSoundError('当前浏览器不支持音频处理，请改用 Chrome 或 Edge。'); return; }
     try {
       const buffer = await loadNotifySoundFile(context, file);
-      setCustomSound({ name: file.name, durationSeconds: buffer.duration, buffer });
+      setCustomSounds(prev => ({ ...prev, [kind]: { name: file.name, durationSeconds: buffer.duration, buffer } }));
       setSoundSource('custom');
     } catch (error) {
-      setCustomSound(null);
+      setCustomSounds(prev => ({ ...prev, [kind]: null }));
       setSoundError(error instanceof Error ? error.message : '音频读取失败，请换一个文件。');
     }
   }, [unlockAudio]);
+
+  // 音效库：上传过的自定义提示音长期留着。这里负责「读文件 → 转 data URL → 解码取时长 → 入库」。
+  const handleSoundLibraryUpload = useCallback(async (file: File): Promise<string | null> => {
+    const context = unlockAudio();
+    if (!context) throw new Error('当前浏览器不支持音频处理，请改用 Chrome 或 Edge。');
+    // 先转 data URL 存起来，再解码取时长；解码失败则不入库。
+    const dataUrl = await new Promise<string>((resolve, reject) => {
+      const reader = new FileReader();
+      reader.onload = () => resolve(String(reader.result));
+      reader.onerror = () => reject(new Error('音频读取失败'));
+      reader.readAsDataURL(file);
+    });
+    const buffer = await loadNotifySoundFile(context, file);
+    const created = createSoundAsset({
+      name: file.name,
+      dataUrl,
+      durationSeconds: buffer.duration,
+      bytes: file.size,
+    });
+    const { library: next, added } = addSoundAssets(soundLibrary, [created]);
+    setSoundLibrary(next);
+    if (soundLibraryReady && added.length) void putSoundAssets(added).catch(() => {});
+    return created.name;
+  }, [unlockAudio, soundLibrary, soundLibraryReady]);
+
+  // 从音效库选一条：把它的 data URL 解码回 AudioBuffer，填进当前目标（收/发）那一声，并记一次使用。
+  const handlePickSound = useCallback(async (asset: SoundAsset) => {
+    const context = unlockAudio();
+    if (!context) { setSoundError('当前浏览器不支持音频处理，请改用 Chrome 或 Edge。'); return; }
+    setSoundError('');
+    try {
+      const blob = await (await fetch(asset.dataUrl)).blob();
+      const buffer = await loadNotifySoundFile(context, blob);
+      setCustomSounds(prev => ({ ...prev, [soundPickTarget]: { id: asset.id, name: asset.name, durationSeconds: buffer.duration, buffer } }));
+      setSoundSource('custom');
+      const touched = touchSoundAsset(soundLibrary, asset.id);
+      if (touched !== soundLibrary) {
+        setSoundLibrary(touched);
+        const record = touched.find(item => item.id === asset.id);
+        if (record) void putSoundAssets([record]).catch(() => {});
+      }
+      setSoundLibraryOpen(false);
+    } catch (error) {
+      setSoundError(error instanceof Error ? error.message : '音频读取失败，请换一个文件。');
+    }
+  }, [unlockAudio, soundLibrary, soundPickTarget]);
+
+  const handleRemoveSound = useCallback((asset: SoundAsset) => {
+    setSoundLibrary(prev => removeSoundAsset(prev, asset.id));
+    // 正在用的那一条被删掉时，对应的提示音退回内置合成音，不能留着一个播不出来的 buffer。
+    setCustomSounds(prev => {
+      const next = { ...prev };
+      for (const kind of ['received', 'sent'] as const) {
+        if (next[kind]?.id === asset.id) next[kind] = null;
+      }
+      return next;
+    });
+    void deleteSoundAssetRecord(asset.id).catch(() => {});
+  }, []);
+
+  const handleRenameSound = useCallback((asset: SoundAsset, name: string) => {
+    const next = renameSoundAsset(soundLibrary, asset.id, name);
+    if (next === soundLibrary) return;
+    setSoundLibrary(next);
+    // 正在用的那条改名了，界面上的「已选：xxx」要跟着变。
+    setCustomSounds(prev => {
+      let changed = false;
+      const result = { ...prev };
+      for (const kind of ['received', 'sent'] as const) {
+        if (result[kind]?.id === asset.id && result[kind]!.name !== name.trim()) {
+          result[kind] = { ...result[kind]!, name: name.trim() || '未命名音效' };
+          changed = true;
+        }
+      }
+      return changed ? result : prev;
+    });
+    const renamed = next.find(item => item.id === asset.id);
+    if (renamed) void putSoundAssets([renamed]).catch(() => {});
+  }, [soundLibrary]);
 
   const downloadBlob = useCallback((blob: Blob, filename: string) => {
     const url = URL.createObjectURL(blob);
@@ -1054,15 +1333,22 @@ function App() {
     if (!messages.length || videoTooLong || !videoSupported) return;
     const size = videoSizeOption(videoSize, screenSize);
     const mimeType = pickVideoMimeType(type => MediaRecorder.isTypeSupported(type));
-    const filename = '微信聊天视频_' + Date.now() + '.' + videoFileExtension(mimeType);
+    const scrolling = videoMode === 'scroll';
+    const filename = (scrolling ? '微信聊天滚动视频_' : '微信聊天视频_') + Date.now() + '.' + videoFileExtension(mimeType);
     const log = beginExportLog({ tool: 'chat', mode: 'video', filename });
     const timeline = playbackTimeline;
-    // 音效总开关关掉时 notifyAt 为空，这里就整段视频都不发声。
-    const soundEvents = notifyAt;
+    // 滚动模式整段对话一开始就都在画面里，没有「收到消息」这一刻，所以整段无声；
+    // 逐条模式则在音效总开关关掉时按空数组处理，同样不发声。
+    const soundEvents = scrolling ? [] : notifyAt;
     const audioContext = soundEvents.length ? unlockAudio() : null;
+    // 声音与节奏只属于逐条模式，这里先把两条时间轴算清楚，后面按模式取用。
+    const scrollRecording = scrollPlan;
+    const totalMs = scrolling ? scrollRecording.durationMs : timeline.totalMs;
+    const renderTotal = scrolling ? 1 : messages.length + 1;
+    const renderHint = scrolling ? '正在把整段对话合成为一张长图，内容越多越慢，请不要切换标签页…' : undefined;
     setVideoOpen(false);
     videoToken.current = { cancelled: false };
-    setVideoProgress({ stage: 'render', current: 0, total: messages.length + 1, elapsedMs: 0, totalMs: timeline.totalMs });
+    setVideoProgress({ stage: 'render', current: 0, total: renderTotal, elapsedMs: 0, totalMs, renderHint });
     showToast('正在生成视频，请保持本页在前台…');
     try {
       // 先做一次本地额度预检，避免白渲染一遍才发现没有额度。
@@ -1075,32 +1361,57 @@ function App() {
         }
         return;
       }
-      const frames = await renderChatFrames({ users, messages, settings, selfId, screen: screenSize }, {
-        token: videoToken.current,
-        onProgress: (current, total) => setVideoProgress({ stage: 'render', current, total, elapsedMs: 0, totalMs: timeline.totalMs }),
-      });
+      // 两条路径各自先把画面准备好：滚动模式是一张长图，逐条模式是每多一条消息一帧。
+      let record: () => Promise<Awaited<ReturnType<typeof recordChatVideo>>>;
+      if (scrolling) {
+        const frame = await renderChatScrollFrame({ users, messages, settings, selfId, screen: screenSize }, { token: videoToken.current });
+        record = () => recordScrollingChatVideo({
+          image: frame.blob,
+          viewport: frame.viewport,
+          topChromeHeight: frame.topChromeHeight,
+          bottomChromeHeight: frame.bottomChromeHeight,
+          size: { width: size.width, height: size.height },
+          background: settings.backgroundColor || '#ededed',
+          plan: scrollRecording,
+          token: videoToken.current,
+          onProgress: (elapsedMs, recordMs) => setVideoProgress({ stage: 'record', current: 0, total: messages.length, elapsedMs, totalMs: recordMs }),
+        });
+      } else {
+        const frames = await renderChatFrames({ users, messages, settings, selfId, screen: screenSize }, {
+          token: videoToken.current,
+          onProgress: (current, total) => setVideoProgress({ stage: 'render', current, total, elapsedMs: 0, totalMs }),
+        });
+        record = () => recordChatVideo({
+          frames: frames.blobs,
+          frameWidth: frames.width,
+          frameHeight: frames.height,
+          frameAtMs: timeline.frameAtMs,
+          totalMs: timeline.totalMs,
+          size: { width: size.width, height: size.height },
+          background: settings.backgroundColor || '#ededed',
+          notifyAt: soundEvents,
+          audio: audioContext ? {
+            context: audioContext,
+            buffers: soundSource === 'custom'
+              ? { received: customSounds.received?.buffer ?? null, sent: customSounds.sent?.buffer ?? null }
+              : {},
+          } : null,
+          token: videoToken.current,
+          onProgress: (elapsedMs, recordMs) => setVideoProgress({ stage: 'record', current: 0, total: messages.length, elapsedMs, totalMs: recordMs }),
+        });
+      }
       // 真正的扣次放在渲染之后：渲染过程中取消不消耗额度，只有开始录制才算一次导出。
       const ticket = await authorizeExport();
       if (!ticket) { void log.finish('cancelled', '额度校验未通过'); return; }
-      setVideoProgress({ stage: 'record', current: 0, total: messages.length, elapsedMs: 0, totalMs: timeline.totalMs });
-      const recorded = await recordChatVideo({
-        frames: frames.blobs,
-        frameWidth: frames.width,
-        frameHeight: frames.height,
-        frameAtMs: timeline.frameAtMs,
-        totalMs: timeline.totalMs,
-        size: { width: size.width, height: size.height },
-        background: settings.backgroundColor || '#ededed',
-        notifyAt: soundEvents,
-        audio: audioContext ? { context: audioContext, buffer: soundSource === 'custom' ? customSound?.buffer ?? null : null } : null,
-        token: videoToken.current,
-        onProgress: (elapsedMs, totalMs) => setVideoProgress({ stage: 'record', current: 0, total: messages.length, elapsedMs, totalMs }),
-      });
+      setVideoProgress({ stage: 'record', current: 0, total: messages.length, elapsedMs: 0, totalMs });
+      const recorded = await record();
       downloadBlob(recorded.blob, filename);
       void log.finish('download_requested');
       completeExport(ticket);
       void trackProductEvent('video_exported', {
         capture_mode: videoSize,
+        // 两种录制方式的效果差得远，分开统计才知道该往哪边投精力。
+        render_mode: videoMode,
         message_count_bucket: messageCountBucket(messages.length),
         tool: 'chat',
       });
@@ -1114,7 +1425,7 @@ function App() {
     } finally {
       setVideoProgress(null);
     }
-  }, [users, messages, settings, selfId, videoSize, screenSize, videoTooLong, videoSupported, playbackTimeline, notifyAt, soundSource, customSound, showToast, authorizeExport, completeExport, promptAfterExport, downloadBlob, unlockAudio, unlimited, visibleQuota.total_remaining, accountSession, openOfficialAccountPrompt]);
+  }, [users, messages, settings, selfId, videoSize, videoMode, scrollPlan, screenSize, videoTooLong, videoSupported, playbackTimeline, notifyAt, soundSource, customSounds, showToast, authorizeExport, completeExport, promptAfterExport, downloadBlob, unlockAudio, unlimited, visibleQuota.total_remaining, accountSession, openOfficialAccountPrompt]);
 
   const handleGenerateImage = useCallback(async () => {
     if (!phoneRef.current) return;
@@ -1210,17 +1521,22 @@ function App() {
   const hasMessages = messages.length > 0;
   // 播放期间预览只渲染了一部分消息，此时截图会导出一段被截断的对话。
   const captureDisabledHint = playbackActive ? '定时发送进行中：先点“显示全部”再导出图片' : undefined;
-  // 同一个素材库弹窗服务三个入口：换头像、换某条消息的图、给待发送的草稿挑一张。
-  const libraryTitle = libraryPicker?.userId !== undefined
-    ? '从素材库选头像'
-    : libraryPicker?.msgId !== undefined || libraryPicker?.draft ? '从素材库选图片' : '我的素材库';
-  const libraryDescription = libraryPicker?.userId !== undefined
-    ? '点一张即可换上这位角色的头像；也可以现在传几张新的，传一张就直接换上。'
-    : libraryPicker?.msgId !== undefined
-      ? '点一张即可换到这条消息上；新上传的图也会留在库里。'
-      : libraryPicker?.draft
-        ? '点一张放进「添加消息 → 图片」，再点添加即可。'
-        : '上传过的头像和表情都会留在这里，下次直接点选即可，不用再翻本地文件。';
+  // 同一个素材库弹窗服务四个入口：换头像、换某条消息的图、给待发送的草稿挑一张、挑一张背景。
+  const backgroundLabel = libraryPicker?.background === 'chat' ? '聊天背景' : libraryPicker?.background === 'moments' ? '朋友圈背景' : '';
+  const libraryTitle = libraryPicker?.background
+    ? `从素材库选${backgroundLabel}`
+    : libraryPicker?.userId !== undefined
+      ? '从素材库选头像'
+      : libraryPicker?.msgId !== undefined || libraryPicker?.draft ? '从素材库选图片' : '我的素材库';
+  const libraryDescription = libraryPicker?.background
+    ? `点一张即可用作${backgroundLabel}；也可以现在传几张新的，传一张就直接换上，之后一直留在库里。`
+    : libraryPicker?.userId !== undefined
+      ? '点一张即可换上这位角色的头像；也可以现在传几张新的，传一张就直接换上。'
+      : libraryPicker?.msgId !== undefined
+        ? '点一张即可换到这条消息上；新上传的图也会留在库里。'
+        : libraryPicker?.draft
+          ? '点一张放进「添加消息 → 图片」，再点添加即可。'
+          : '上传过的头像、表情和背景图都会留在这里，下次直接点选即可，不用再翻本地文件。';
 
   return (
     <>
@@ -1268,6 +1584,11 @@ function App() {
                     soundEnabled={soundEnabled}
                     soundReceive={soundReceive}
                     soundSend={soundSend}
+                    soundSource={soundSource}
+                    customSoundNames={{
+                      received: customSounds.received?.name ?? null,
+                      sent: customSounds.sent?.name ?? null,
+                    }}
                     busy={videoProgress !== null}
                     onPlay={handlePlayStart}
                     onPause={handlePlayPause}
@@ -1277,11 +1598,13 @@ function App() {
                     onSoundToggle={setSoundEnabled}
                     onSoundReceiveChange={setSoundReceive}
                     onSoundSendChange={setSoundSend}
+                    onSoundSourceChange={setSoundSource}
+                    onPickSound={soundLibraryReady ? kind => { setSoundPickTarget(kind); setSoundError(''); setSoundLibraryOpen(true); } : undefined}
                   />
                   <div className="chat-export-summary"><span>{messages.length} 条消息 · {users.length} 个角色</span><span>{unlimited ? '会员不限次' : `剩余 ${visibleQuota.total_remaining} 次`}</span></div>
                   <div className="chat-export-primary-row">
                     <Button type="button" className="btn btn-primary chat-export-primary" disabled={!hasMessages || playbackActive} title={captureDisabledHint} onClick={handleGenerateImage}><Download size={16} /> 生成图片</Button>
-                    <Button type="button" className="btn btn-primary chat-export-primary" disabled={!hasMessages || videoTooLong || !videoSupported} title={videoTooLong ? `一次最多导出 ${maxVideoMessages} 条消息的视频` : videoSupported ? '按顺序播放并录制成视频，带消息提示音' : '当前浏览器不支持本地生成视频'} onClick={() => { setSoundError(''); setVideoOpen(true); }}><Video size={16} /> 生成视频</Button>
+                    <Button type="button" className="btn btn-primary chat-export-primary" disabled={!hasMessages || videoTooLong || !videoSupported} title={videoTooLong ? `一次最多导出 ${maxVideoMessages} 条消息的视频` : videoSupported ? '录制成视频：逐条播放并带提示音，或整段对话滚动到底' : '当前浏览器不支持本地生成视频'} onClick={() => { setSoundError(''); setVideoOpen(true); }}><Video size={16} /> 生成视频</Button>
                   </div>
                   <div className="chat-export-secondary"><Button type="button" className="btn btn-outline" disabled={!hasMessages || playbackActive} title={captureDisabledHint} onClick={handleGenerateLongImage}><ImageIcon size={15} /> 长截图</Button><Button type="button" className="btn btn-outline" disabled={!hasMessages || playbackActive} title={captureDisabledHint} onClick={handleCopyImage}><Copy size={15} /> 复制</Button><Button type="button" className="btn btn-outline" disabled={!hasMessages} onClick={handleShareSame}><Share2 size={15} /> 同款链接</Button></div>
                 </div>}>
@@ -1316,15 +1639,37 @@ function App() {
                   onManageLibrary={() => setLibraryPicker({ kind: 'avatar' })}
                   libraryAvatarCount={mediaAssetsOfKind(library, 'avatar').length}
                   libraryEnabled={libraryReady}
+                  avatarPresets={avatarPresets}
+                  presetsEnabled={presetsReady}
+                  onUsePreset={handleUsePreset}
+                  onRenamePreset={handleRenamePreset}
+                  onRemovePreset={handleRemovePreset}
                 /> : <div className="workspace-empty"><UsersRound size={30} /><h2>先添加聊天角色</h2><p>导入对话后，即可在这里设置头像和“我”的身份。</p><Button type="button" className="btn btn-outline" onClick={() => setChatSection('content')}>编辑聊天内容</Button></div>}</TabsContent>
-                <TabsContent className="chat-section-content" value="settings" keepMounted><SettingsPanel settings={settings} onSettingsChange={setSettings} /></TabsContent>
+                <TabsContent className="chat-section-content" value="settings" keepMounted><SettingsPanel
+                  settings={settings}
+                  onSettingsChange={setSettings}
+                  onUploadBackground={uploadBackgroundFile}
+                  onOpenBackgroundLibrary={libraryReady ? () => openBackgroundLibrary('chat') : undefined}
+                  backgroundAssets={mediaAssetsOfKind(library, 'background')}
+                  onBackgroundUsed={asset => markAssetUsed(asset.id)}
+                  libraryEnabled={libraryReady}
+                /></TabsContent>
                 <TabsContent className="chat-section-content" value="projects" keepMounted><ProjectPanel projects={projects} activeProjectId={activeProjectId} activeProjectName={activeProjectName} saveState={saveState} storageAvailable={storageAvailable} onCreate={() => { void handleCreateProject().then(() => setChatSection('content')); }} onOpen={project => { void handleOpenProject(project).then(() => setChatSection('content')); }} onRename={setActiveProjectName} onDuplicate={project => { void handleDuplicateProject(project); }} onDelete={project => { void handleDeleteProject(project); }} />{!projects.length && <p className="workspace-muted">暂无本地草稿。开始编辑后会自动保存到当前浏览器。</p>}</TabsContent>
                 </Tabs>
               </WorkspacePanels>
             </div>
-            <div className="studio-tool-page" hidden={route !== 'moments'}><MomentsEditor onToast={showToast} onBeforeExport={authorizeExport} onExportSuccess={ticket => {
-              completeExport(ticket); void trackProductEvent('image_exported', { capture_mode: 'standard', tool: 'moments' }); promptAfterExport();
-            }} /></div>
+            <div className="studio-tool-page" hidden={route !== 'moments'}><MomentsEditor
+              onToast={showToast}
+              onBeforeExport={authorizeExport}
+              onUploadCover={uploadBackgroundFile}
+              onPickCover={libraryReady ? pickMomentCover : undefined}
+              backgroundAssets={mediaAssetsOfKind(library, 'background')}
+              onBackgroundUsed={asset => markAssetUsed(asset.id)}
+              libraryEnabled={libraryReady}
+              onExportSuccess={ticket => {
+                completeExport(ticket); void trackProductEvent('image_exported', { capture_mode: 'standard', tool: 'moments' }); promptAfterExport();
+              }}
+            /></div>
             {(['payment', 'redpacket', 'profile', 'group'] as const).map(kind => <div className="studio-tool-page" key={kind} hidden={route !== kind}><WechatSceneEditor kind={kind} onToast={showToast} onBeforeExport={authorizeExport} onExportSuccess={ticket => {
               completeExport(ticket); void trackProductEvent('image_exported', { capture_mode: 'standard', tool: kind }); promptAfterExport();
             }} /></div>)}
@@ -1362,20 +1707,21 @@ function App() {
       {shareOpen && <ShareDialog session={accountSession} onClose={closeShare} onAccount={() => { setShareOpen(false); setAccountError(''); setAccountPrompt(true); }} />}
       <MediaLibraryDialog
         open={libraryPicker !== null}
-        onOpenChange={open => { if (!open) setLibraryPicker(null) }}
+        onOpenChange={open => { if (!open) closeLibraryPicker() }}
         assets={library}
         kind={libraryPicker?.kind ?? 'sticker'}
         onKindChange={kind => setLibraryPicker(current => !current ? { kind } : {
-          // 换类目就等于换了用途，旧目标（某位角色 / 某条消息）不再适用，一并清掉。
+          // 换类目就等于换了用途，旧目标（某位角色 / 某条消息 / 某处背景）不再适用，一并清掉。
           kind,
           userId: kind === 'avatar' ? current.userId : undefined,
           msgId: kind === 'sticker' ? current.msgId : undefined,
           draft: kind === 'sticker' ? current.draft : undefined,
+          background: kind === 'background' ? current.background : undefined,
         })}
         enabled={libraryReady}
         title={libraryTitle}
         description={libraryDescription}
-        pickLabel={libraryPicker?.userId !== undefined ? '设为头像' : '使用'}
+        pickLabel={libraryPicker?.background ? '用作背景' : libraryPicker?.userId !== undefined ? '设为头像' : '使用'}
         onPick={handlePickFromLibrary}
         onUpload={handleLibraryUpload}
         onRemove={handleRemoveAsset}
@@ -1385,17 +1731,24 @@ function App() {
         open={videoOpen}
         onOpenChange={open => { setVideoOpen(open); if (!open) setSoundError(''); }}
         settings={{
+          mode: videoMode,
           size: videoSize,
           pace: playbackPace,
+          scrollDurationSeconds: scrollDuration,
           soundEnabled,
           soundReceive,
           soundSend,
           soundSource,
-          customSound: customSound ? { name: customSound.name, durationSeconds: customSound.durationSeconds } : null,
+          customSounds: {
+            received: customSounds.received ? { name: customSounds.received.name, durationSeconds: customSounds.received.durationSeconds } : null,
+            sent: customSounds.sent ? { name: customSounds.sent.name, durationSeconds: customSounds.sent.durationSeconds } : null,
+          },
         }}
         onChange={patch => {
+          if (patch.mode) setVideoMode(patch.mode);
           if (patch.size) setVideoSize(patch.size);
           if (patch.pace) setPlaybackPace(patch.pace);
+          if (patch.scrollDurationSeconds !== undefined) setScrollDuration(patch.scrollDurationSeconds);
           if (patch.soundEnabled !== undefined) setSoundEnabled(patch.soundEnabled);
           if (patch.soundReceive !== undefined) setSoundReceive(patch.soundReceive);
           if (patch.soundSend !== undefined) setSoundSend(patch.soundSend);
@@ -1403,14 +1756,31 @@ function App() {
         }}
         messageCount={messages.length}
         soundCount={notifyAt.length}
-        estimatedMs={playbackTimeline.totalMs + (messages.length + 1) * 300}
+        // 两种模式的耗时构成完全不同：逐条模式是「每帧渲染 + 按节奏录制」，
+        // 滚动模式是一次长图合成 + 按设定时长录制。
+        estimatedMs={videoMode === 'scroll'
+          ? scrollPlan.durationMs + 3000
+          : playbackTimeline.totalMs + (messages.length + 1) * 300}
         durationLabel={playbackDurationLabel(playbackTimeline.totalMs)}
         containerLabel={videoContainer}
         screen={screenSize}
         supported={videoSupported && !videoTooLong}
         soundError={soundError}
-        onSoundFile={file => void handleSoundFile(file)}
+        onSoundFile={(file, kind) => void handleSoundFile(file, kind)}
+        onOpenSoundLibrary={soundLibraryReady ? kind => { setSoundPickTarget(kind); setSoundLibraryOpen(true); } : undefined}
+        soundLibraryCount={soundLibrary.length}
         onConfirm={() => void handleExportVideo()}
+      />
+      <SoundLibraryDialog
+        open={soundLibraryOpen}
+        onOpenChange={setSoundLibraryOpen}
+        assets={soundLibrary}
+        enabled={soundLibraryReady}
+        pickTargetLabel={soundPickTarget === 'received' ? '「收到消息」那一声' : '「发送消息」那一声'}
+        onPick={asset => void handlePickSound(asset)}
+        onUpload={handleSoundLibraryUpload}
+        onRemove={handleRemoveSound}
+        onRename={handleRenameSound}
       />
       {videoProgress && <VideoProgressOverlay
         stage={videoProgress.stage}
@@ -1418,6 +1788,7 @@ function App() {
         total={videoProgress.total}
         elapsedMs={videoProgress.elapsedMs}
         totalMs={videoProgress.totalMs}
+        renderHint={videoProgress.renderHint}
         onCancel={() => { videoToken.current.cancelled = true; }}
       />}
     </>

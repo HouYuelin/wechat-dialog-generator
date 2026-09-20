@@ -75,7 +75,7 @@
 
 消息音效由「一个音量开关 + 仅接收/每条」改为「收到」与「发送」两个独立开关，两者音色不同：
 
-- `received`：两声「叮咚」，`sent`：一声「咻」；都在 `src/lib/notify-sound.ts` 里用 Web Audio 实时合成，不引入第三方音频文件。
+- `received`：两声「叮咚」，`sent`：一声「咻」；都在 `src/lib/notify-sound.ts` 里用 Web Audio 实时合成，不引入第三方音频文件。具体取音见下面「对齐微信提示音」一节。
 - 时间轴的 `notify` 字段由布尔值改为 `NotifyKind | null`，`notifyEvents()` 同时给出时刻与音效类型，预览播放和视频录制共用这一份排期。
 - 上传的自定义音频只替换「收到」那一声，发送音效始终用内置合成音，避免两者混成同一个声音（`customSoundReplaces()` 覆盖该规则）。
 
@@ -83,16 +83,36 @@
 
 重新解析聊天记录时不再清空用户上传的头像与指定的「自己」。
 
-- **头像按名字复用，不按 id。** 每次 `parseChatRecord` 都从 1 重新编号，id 不稳定；解析器对同一份记录里的同名发送者只建一个用户，所以名字才是身份。规则集中在 `src/lib/user-avatars.ts`：`carryOverAvatars()` 先按名字取旧头像（归一化后比较，容忍首尾空白与大小写），名字是「我」时改用原来「自己」那张；用户自带的头像优先，不会被覆盖。`carryOverSelfId()` 按名字找回原来那位「自己」，找不到（换了另一段对话）才退回解析器的默认——第一个发言者。
+- **头像按名字复用，不按 id。** 每次 `parseChatRecord` 都从 1 重新编号，id 不稳定；解析器对同一份记录里的同名发送者只建一个用户，所以名字才是身份。规则集中在 `src/lib/user-avatars.ts`：`carryOverAvatars()` 先按名字取旧头像（归一化后比较，容忍首尾空白与大小写），名字是「我」时改用原来「自己」那张；用户自带的头像优先，不会被覆盖。`carryOverSelfId()` 按名字找回原来那位「自己」，找不到（换了另一段对话）才退回解析器的默认——第一个发言者。**归档比当前编辑状态活得久**：同样的按名字认人，长期那一份存在 `src/lib/avatar-presets.ts`（见「用过的头像」一节）。
 - `batch.ts` 的 `chatSnapshot()` 原本内联了同一套规则，现已改为调用这两个函数，单聊导入与批量导出共用一个实现。`batch.test.ts` 里「reuse same-name avatars」那条继续通过，等于给这次抽取加了回归保护。
 - 唯一会主动写 `avatar: null` 的地方是「移除自定义头像」按钮（`handleRemoveAvatar`，用户显式操作）；解析器产出的 `avatar: null` 只是新建用户的初始值，由上面的规则负责补齐。
 
 内置提示音由纯正弦升级为加法合成，听感贴近微信的收发音：
 
 - 新增 `NotifyPartial` 泛音列：接收音的每一声都是基音 + 2 / 3 / 4.76 倍泛音。4.76 是刻意取的非整数倍，用来做出敲击的金属光泽；增益依次减半，衰减系数依次变小——**越高的泛音收得越快**，这是敲击音与和弦的分水岭，调音时最容易改坏（`notify-sound.test.ts` 有断言守着）。
-- 新增 `NotifyWhoosh`：白噪声经带通滤波、中心频率从 2600Hz 扫到 820Hz，做出「咻」的气流声。噪声缓冲区按采样率缓存复用，不每次重算。
-- 发送音 = 气流声 + 一个快速下滑音（1560→520Hz），只堆气流会听成一阵风，垫下滑音才听成「发出去了一条」。
+- `NotifyWhoosh`：白噪声经带通滤波扫频，做出「咻」的气流声。噪声缓冲区按采样率缓存复用，不每次重算。
+- 发送音 = 气流声 + 一个快速下滑音，只堆气流会听成一阵风，垫下滑音才听成「发出去了一条」。
 - 依然**不打包任何第三方音频文件**：微信那段音频属于第三方，嵌进产物有版权风险。想要原声走「我的音频」上传。
+
+#### 对齐微信提示音（2026-09-20 调音）
+
+起因是「收发提示音要改成和微信一致」。这里有个绕不开的前提：**合成的只能逼近，不可能与原始录音逐样本一致**——原始音频是第三方的，项目不打包（见上一条）。所以做的是按公开资料把听感往微信那一声上调，并把「换原声」的口子留好。
+
+调音依据（是公开描述，不是原始录音的频谱，因此只落在保守的区间上）：
+
+- 微信官方口径反复形容这声是「圆润柔和」「温润通透」「不刺耳」，并有「和谐大三度音程」的说法；第三方对同一体系做的声学报告给的能量集中在 800 Hz–2.5 kHz。
+- 「叮咚」这个名字本身就是**高→低**；iOS 上微信长期沿用系统 Tri-tone，也是下行。所以保留两声下行，而不是改成上行的三音。
+- 旧值是 1318.51 → 987.77 Hz 的**正四度**，又高又亮，听感更像电子门铃。
+
+改动：
+
+- 接收音改为 **987.77 → 783.99 Hz（B5 → G5）的下行大三度**，间隔 110ms，第二声留 430ms 让有余韵；最上面那条非整数泛音从 0.07 压到 0.05、衰减从 0.26 收到 0.22，木质感更重、玻璃感更轻。
+- 发送音收紧到 130ms，带通从 2200 扫到 760 Hz，下滑音 1650 → 1050 Hz——更短更干脆，和接收音离得更开。
+- `notifySoundDurationMs.received` 480 → 580（必须盖住最后一个音的收声时刻，否则 `playNotify` 会在尾巴上把节点 `stop()` 掉；测试里有这条断言）。
+
+`notify-sound.test.ts` 新增一条把上述意图钉住的用例：高→低、频率比近似大三度（±0.01）、两声都低于 1100 Hz、间隔小于 200ms。**以后谁改音高，只要破坏了「微信那一声」的听感特征，这条会先红。**
+
+备注：本机既没有浏览器也没有耳朵可用，所以另做了一次**调度层核查**——用记账式 Web Audio 桩跑真实的 `createNotifyPlayer`，把排下去的振荡器频率、增益斜坡、滤波扫频逐条断言（8 个振荡器 = 2 声 × 4 条泛音、泛音是基音的 1/2/3/4.76 倍、第二声晚 110ms 起音、**没有任何指数斜坡指向 0**——那会让浏览器直接抛错）。这只能证明「排期正确、不会炸」，好不好听得靠人耳。
 
 ## 2026-09-20 图片消息大小与视频结尾留白
 
@@ -114,22 +134,22 @@
 
 预览弹层内的档位（窗口大小 / 屏幕尺寸 / 图片大小）都是**本地 state，按打开时传入的 props 初始化**，不做额外的同步 effect。依据是 `Popover.Portal` 默认 `keepMounted=false`（`node_modules/@base-ui/react/popover/portal/PopoverPortal.js`：`shouldRender = mounted || keepMounted`，关闭即 `return null`），弹层关闭会卸载整棵子树，重新打开时自然是新值；而切项目、套模板这类会换掉 `settings` 的操作都发生在弹层之外，点击时会先把弹层关掉。这样也绕开了 `react-hooks/set-state-in-effect`（在 effect 里同步 setState 会被判定为级联渲染）。
 
-## 2026-09-20 素材库（头像 / 表情图片）
+## 2026-09-20 素材库（头像 / 表情图片 / 背景图）
 
-上传过的头像和表情图片不再是一次性的：它们会存进这台浏览器的素材库，下次直接点选复用。
+上传过的头像、表情图片和背景图不再是一次性的：它们会存进这台浏览器的素材库，下次直接点选复用。
 
 ### 分层
 
-- `src/lib/media-library.ts`：纯逻辑，不碰存储也不碰 DOM——去重、分类、上限淘汰、批量分配头像、体积统计都在这里，`media-library.test.ts` 全部覆盖。
+- `src/lib/media-library.ts`：纯逻辑，不碰存储也不碰 DOM——去重、分类、上限收录、批量分配头像、体积统计都在这里，`media-library.test.ts` 全部覆盖。
 - `src/lib/image-file.ts`：读文件与压缩（`readImageFile`），其中 `scaledImageSize` / `needsReencode` / `encodeMimeType` 是纯函数，另有单测。
-- `src/lib/project-store.ts`：IndexedDB。**数据库版本 3 → 4**，新增 `media-assets` store（keyPath `id`，索引 `kind`）。升版本号时必须在这里把新 store 一起建出来，否则老用户升级上来会打开一个缺 store 的库，读素材直接抛错。写入走增量 `putMediaAssets()`，不整库重写（恢复一次几十张、每张几百 KB 的库全量重写会明显卡顿）；`store.count()` 只是用来等事务提交的收尾请求。
+- `src/lib/project-store.ts`：IndexedDB。**数据库版本 3 → 4** 新增 `media-assets` store（keyPath `id`，索引 `kind`），**4 → 5** 再加 `avatar-presets` store（keyPath `id`，见下一节）。升版本号时必须在这里把新 store 一起建出来，否则老用户升级上来会打开一个缺 store 的库，读它直接抛错。写入走增量 `putMediaAssets()`，不整库重写（恢复一次几十张、每张几百 KB 的库全量重写会明显卡顿）；`store.count()` 只是用来等事务提交的收尾请求。
 - `src/components/MediaLibraryDialog.tsx`：弹窗（批量上传 / 选取 / 改名 / 删除）与编辑区快捷条 `MediaLibraryStrip`。
 
 ### 规则
 
 - **去重按 data URL**：同一个文件读出来必然一模一样，所以 data URL 本身就是唯一键。重复上传只留一条，弹窗回执会说明跳过了几张。
-- **每类上限 80 张，淘汰最久没用过的**（`usedAt`），但**本批新加的一律优先留下**：一次传 100 张时先挤掉库里的旧图，实在还超才丢本批末尾，不会出现「刚上传就被自己的批量操作挤掉」。
-- 两套排序各管一件事：网格用 `createdAt` 倒序（列表稳定，点选时不会在光标底下跳）；快捷条与淘汰用 `usedAt` 倒序（最近用过的靠前）。
+- **只增不删**：曾经按「最久没用过」自动淘汰超上限的素材，用户攒的头像会莫名其妙少几张，还查不出是谁删的，这条规则整个去掉了。现在 `maxAssetsPerKind`（每类 2000 张）只用来**拒收**新图：额度用完就是这一批多出来的收不下，`addMediaAssets()` 如实返回 `rejected` 张数转成回执，**库里已有的素材一张都不会被自动清掉**。删除只有两个入口，都在用户手里：素材库列表的删除按钮，和「用过的头像」里的删除按钮。
+- 两套排序各管一件事：网格用 `createdAt` 倒序（列表稳定，点选时不会在光标底下跳）；快捷条用 `usedAt` 倒序（最近用过的靠前）。
 - **按最长边 1280px 预压**：素材库存的是 data URL，手机照片 3–5 MB 会让浏览器存储很快见底，而聊天里图片最宽只显示到内坐标系 700px（导出 2K 时约 896px）、头像更小。GIF / SVG 与本来就很小的图原样保留，避免二次压缩丢动画、丢矢量、磨画质。
 - 素材库独立于项目：换项目、重新导入、清空编辑器都不影响它，所以 App 单独加载一次，不入 `ChatProjectSnapshot`。
 - 头像与图片消息用的是**素材库里那份 data URL 的副本**，所以删素材不会把已经用上的头像或图片从对话里抹掉。
@@ -137,11 +157,35 @@
 
 ### 入口
 
-- 「角色头像」：每张卡片有「素材库」按钮换现成头像；面板顶部「批量上传头像」按选择顺序覆盖前 N 位角色；单文件上传（点卡片头像）同样会入库。
+- 「角色头像」：每张卡片有「素材库」按钮换现成头像；面板顶部「批量上传头像」按选择顺序覆盖前 N 位角色；单文件上传（点卡片头像）同样会入库。面板下半部分是用过的头像归档（见下一节）。
 - 「聊天内容 → 添加消息 → 图片」：图片下方是最近用过的素材快捷条，点一张即设为待添加的图片；「上传 / 管理」打开完整弹窗。
 - 预览里点图片消息气泡：打开素材库选一张，弹窗里也能现传；只传一张时直接换上，省掉再点一次「使用」。
-- 弹窗按「为什么打开」给出不同标题与按钮文案（设为头像 / 使用），换类目时会清掉旧目标（某位角色 / 某条消息）。
+- 弹窗按「为什么打开」给出不同标题与按钮文案（设为头像 / 用作背景 / 使用），换类目时会清掉旧目标（某位角色 / 某条消息 / 某处背景）。
 - 弹窗拆成内外两层：`Dialog.Popup` 关闭会卸载整棵子树，`busy` / 回执 / 改名草稿这些临时状态随之消失，不需要额外 effect 清空（同上一条弹层约定）。
+- 「手机样式 → 聊天背景」与「朋友圈 → 发布身份 → 朋友圈背景」各有一行与表情图同样的快捷条，点一张直接换上去；「上传 / 管理」打开完整弹窗。两处的上传都走同一条入库链路，详见下一节。
+
+## 2026-09-20 用过的头像（按角色名归档）
+
+需求是「我用过的头像都要保留，不要每次导入聊天记录就删掉；导入时遇到同名角色自动匹配，否则新建一条；这些记录要能手动删除和重命名」。要做到这一点，光靠素材库不够：素材库按文件名叫「头像」，而用户记的是「这张脸是给谁的」。
+
+### 为什么单开一份归档
+
+项目里的 `users` 是 `parseChatRecord` 的产物，**换一段聊天记录、开一份别的草稿，整份数组就被替换掉了**，之前给某个角色配的头像跟着消失。所以另存一份以「角色名」为键的归档，和素材库一样独立于项目。
+
+- `src/lib/avatar-presets.ts`：纯逻辑，`avatar-presets.test.ts` 全部覆盖。
+- **归档 id 由角色名推导**（`avatarPresetId(name)` → `avatar-preset:<归一化名字>`）：名字是唯一键，id 跟着走就不会出现「同一个名字存了两条」。重复渲染、严格模式跑两遍 effect 都只是把同一条写第二遍；删掉的那条也不会因为库里还留着同名的另一条而复活。
+- **改名必须连主键一起换**（`renameAvatarPreset()`）。这是最容易埋雷的一处：如果只改 `name` 而留着旧 id，等旧名字（比如「小林」）以后被重新导入的角色用上时，`upsertAvatarPreset()` 会照旧推出主键 `avatar-preset:小林`，和那条改过名的记录撞同一个键，写库时直接把它覆盖掉。换键之后 `id === avatar-preset:<名字>` 这个不变量一直成立。改名到别人已经占着的名字上**拒绝而不是合并**（返回 `error`），免得把另一条的头像悄悄吃掉；只差空白或大小写视作没改，返回 `preset: null` 让调用方跳过写库。`cleanAvatarName()` 统一做「去首尾空白 + 压内部连续空白 + 截 60 字」，改名与 upsert 共用，免得显示的名字和认人用的键不一致。
+- **只增不删**：`upsertAvatarPreset()` 在头像没变时原样返回 `{ list, preset: null }`，调用方据此跳过写库——否则每次渲染都算一次改动，会白白写一遍 IndexedDB。`rememberUserAvatars()` / `applyPresetsToUsers()` 都只在真有改动时才返回新数组。
+- 取消某位角色的头像（卡片上的 ✕）、换一张新的、角色离开对话，**都不动归档**；只有面板里的改名与删除按钮会动一条，物理删除走 `deleteAvatarPresetRecord()`。
+- 头像是 data URL 的副本，和素材库那份一样：删归档里的一条不会把已经用上的头像从对话里抹掉。
+
+### 接线
+
+- App 单独加载一次归档（`loadAvatarPresets()`，与素材库各读各的，一边失败不拖累另一边）。
+- **一个只增不删的同步 effect**：`users` 一变就把「角色名 + 头像」写进归档。上传、批量上传、从素材库选、重新导入补回来的头像走的都是这条，不必在每个入口各记一次。
+- `handleImport` 里，`carryOverAvatars()`（认当前编辑状态）之后再过一道 `applyPresetsToUsers()`（认归档）：换过草稿、换过聊天记录时，上一段对话里根本没有的角色也能从归档里找回自己的头像。回执会分开说明「已沿用 N 个头像」与「其中 M 个来自用过的头像」。
+- 面板里每条能做三件事：「用上」把头像还给同名的那位角色（角色不在当前对话里就只标「仅保存」，不做别的）；铅笔进入行内改名（Enter 提交、Escape 取消，重名或空名会提示并把输入框留在原地，不用重新点一次）；垃圾桶删掉这一条。
+- 改名有个能预期的副作用：如果旧名字此刻还挂在当前对话的某位角色身上，同步 effect 会照旧给它记一条（那位角色确实还在用这张头像）。`handleRenamePreset` 会检测到这点并在提示里说明，免得用户以为改名生出了一条重复记录。
 
 ## 2026-09-20 对话字体大小
 
@@ -166,4 +210,116 @@
 - 单位是内部坐标系 px，与导出分辨率（屏幕尺寸）无关：换分辨率时字号占屏幕的比例不变。
 - 新增字段要同步 `App.tsx` 的 `defaultSettings`、`share-link.ts` 的 `sanitizeSettings`，以及 `project-store.test.ts` / `share-link.test.ts` / `WechatPhoneChrome.tsx` 三处字面量；旧项目缺字段由 `normalizeFontScale()` 兜底。
 - 档位：紧凑 80 / 偏小 90 / 标准 100 / 偏大 115 / 特大 130，自定义 70–140。真值域在 `clampFontScale` / `normalizeFontScale` / `fontScaleRatio` 里收口，`font-size.test.ts` 9 条断言覆盖（含「100% 时气泡可用宽度恰为 713」这条跨文件不变量）。
+
+## 2026-09-20 背景图进素材库
+
+需求是「上传过的背景图，也要保存到素材库，和头像、表情包一样，支持从素材库选」。背景图此前是**一次性**的：`settings.backgroundImage` 与朋友圈草稿的 `coverImage` 各存一份 data URL，换项目、换草稿就得重传，而且与素材库毫无关系。
+
+### 加一个类目，而不是新开一套存储
+
+- `MediaKind` 增加 `background`，`mediaKinds` / `mediaKindLabels`（背景图）/ `mediaKindUnits`（张背景）跟着补。存储层一行没改：`media-assets` 本来就是按 `kind` 分区的通用 store，**不需要再升数据库版本**（上一节说过，升版本只为新建 store）。
+- `isMediaKind()` 是入库与读库两条路径共用的白名单。放宽它，旧库里本来就有的记录才能被认出来；反过来，认不出的 `kind` 记录照旧丢弃——`media-library.test.ts` 里有一条断言专门守着这个边界。
+- 上限按类目各算各的：背景图满了不影响头像，回执照旧如实说明几张没进来。
+- `MediaLibrarySummary` 顺手从 `{ avatar, sticker, total, bytes }` 改成 `counts: Record<MediaKind, number>`，`mediaLibrarySummaryLabel()` 遍历 `mediaKinds` 拼文案。原来的写法每加一个类目就要回来补两处，正是这次差点漏掉的地方。
+
+### 两处背景共用一个上传入口
+
+- `uploadBackgroundFile()`（App）就是背景版的 `uploadImageFile()`：读图 → 入库 → 返回 data URL。聊天背景（`SettingsPanel`）与朋友圈封面（`MomentsEditor`）都传它，所以「传一次，两处都能从库里选」。
+- 入库失败只可能是这一类到上限，这时会提示一句但仍返回 data URL——**本次照样用得上**，只是留不到下次，与素材库不可用时的降级口径一致（单张正常入库不打扰，免得每传一次图弹一条没用的提示）。
+- 两个面板都不直接依赖素材库状态：`onUploadBackground` / `onUploadCover` 不传就退回本地 `FileReader`，所以 `BatchStudio` 复用 `SettingsPanel` 时不需要知道素材库的存在（那里的背景图跟着批量项目走）。
+- 素材库不可用时 `onOpenBackgroundLibrary` / `onPickCover` 传 `undefined`，`MediaLibraryStrip` 自己会渲染成 `null` ——入口整体隐藏，而不是留一个点进去空手而归的按钮。
+
+### 弹窗仍然只有一个实例
+
+朋友圈封面在 `MomentsEditor` 的草稿里，弹窗在 App 里。为了不复制出第二个 `MediaLibraryDialog`，「选一张封面」用一次性的 Promise 接：`pickMomentCover()` 把 resolver 存进 `pendingBackgroundPick` 再打开弹窗，选中时兑现成 data URL。
+
+- 关掉弹窗没选东西，也必须兑现 `null` —— 否则调用方那个 `await` 永远挂着，之后再选一次也不会生效。所以关闭统一走 `closeLibraryPicker()`，它会先取出 resolver 再关。
+- 连点两次时先兑现上一个（`pendingBackgroundPick.current?.(null)`），同一时刻只留一个等待者。
+- 兑现前先把 ref 清空，这样 App 自己调 `closeLibraryPicker()` 时不会重复兑现一次（base-ui 在受控 `open` 变 false 时也可能回调 `onOpenChange`）。
+- 另一条路是**不上弹窗也能直选**：快捷条里点缩略图，`SettingsPanel` / `MomentsEditor` 直接写进 `settings` / `draft`，再调 `onBackgroundUsed` 记一次使用，让它排到快捷条最前面。只有走弹窗那条才会经过 Promise。
+
+### 行为变化
+
+- 背景图现在与其它素材一样**按最长边 1280px 预压**（此前聊天背景是原样存 8MB 的原始文件）。预览用的手机宽度按 500px、导出 2K 计约 1000px，1280 仍有余量，体积却能降一个数量级。
+- 背景图同样受「每类 2000 张」上限约束，且**不会被自动清除**。
+- 「删素材不会影响已经用上的头像与图片」这句现在也包含背景图：用上去的是副本。
+
+## 2026-09-20 添加消息写回聊天记录文本
+
+### 问题
+
+「聊天内容」页有两个入口：上面的导入框（`importText`）和下面的「添加消息」面板（直接往 `messages` 里塞）。文本是**唯一能改到内容的地方**——预览里点文字气泡没有任何反应，图片气泡也只支持换图。于是从面板加进去的消息只活在内存里：改不了，而且下一次点「解析并导入」，整份对话会按文本重建，这条消息连同它的改动一起消失。
+
+### 做法：写回，而不是再开一套编辑界面
+
+- `parser.ts` 新增 `messageToRecordLine(msg, senderName)`：把一条消息还原成记录文本的一行。规则与文件顶部那组解析正则一一对应，所以「写回文本 → 再解析」拿到的是同一条消息；`parser.test.ts` 有一条来回走的用例把这件事钉住。
+- `parser.ts` 新增 `appendMessageToRecord(text, msg, senderName)`：先削掉原文本末尾的空白，空文本就直接用这一行，免得连点几次「添加」在文本里堆出一串空行。
+- `App.tsx` 的 `handleAddMessage` 在写入 `messages` 的同时把这一行追加进 `importText`。发送人名字按 `senderId` 从 `users` 取（此时 `users` 一定有值，否则「添加消息」面板根本不渲染）。
+- 文本框下方补了一句说明，讲清「新加的消息会追加到这段文本、改完点解析并导入即重建」。
+
+### 三个刻意的取舍
+
+- **换行压成一行**：解析按行切分，文本消息里带换行会让这一条被拆成两条，所以写回时把换行换成空格。
+- **图片只写 `[图片]` 标记**：本地图片是几十万字符的 data URL，塞进输入框会直接卡死；带 http(s) 地址的图仍按原样写地址。代价是重新解析后图片回到占位状态，需要在预览里点一下从素材库再选一张——这一步本来就有，且素材库现在是持久的。
+- **顺带修了转账的解析**：改成只按第一个冒号切分，「`[转账]88:还你的，备注：带冒号`」不再把备注截断成「还你的」；否则写回再解析就不等于原消息了。
+
+### 边界
+
+文本与 `messages` 仍是两份状态。删除某条消息的做法是：在文本框里删掉对应那行，再点「解析并导入」。面板加消息走的是同一条链路，所以顺序与内容都对得上。
+
+## 2026-09-20 音效库（自定义提示音）
+
+需求是「上传过的节奏音效要留起来，能自己选、能改名、能手动删除，和头像表情包一样」。此前自定义提示音只存在当前页面的 `customSound` 状态里（`AudioBuffer` 不可序列化），刷新、换对话就丢，也没有管理入口。
+
+### 存储：audio data URL，而不是 image data URL
+
+音效是音频不是图片，所以新开一个 `sound-assets` store（数据库版本 5 → 6），而不是塞进 `media-assets`（那里按 `kind` 分区、且只认 `data:image/`）。
+
+- `src/lib/sound-library.ts`：纯逻辑，`SoundAsset` 含 `dataUrl`（`data:audio/...;base64`）、`durationSeconds`、`bytes`，配套 `createSoundAsset` / `normalizeSoundLibrary`（按 dataUrl 去重）/ `addSoundAssets`（每类上限 `maxSoundAssets = 2000`，只拒收不清旧）/ `touchSoundAsset` / `renameSoundAsset` / `removeSoundAsset` / `soundAssetMeta`。`sound-library.test.ts` 12 条断言全部覆盖。
+- 音频比图片大，但提示音通常只有几百 KB，且上传入口本来就限 4 MB，data URL 存 IndexedDB 与现有素材库口径一致。
+- 音频解码仍走 `notify-sound.ts` 的 `loadNotifySoundFile()`：上传时 decode 一次拿时长，选用时从 data URL 还原成 Blob 再 decode 成 `AudioBuffer` 填进 `customSound`。
+
+### 弹窗：SoundLibraryDialog
+
+`src/components/SoundLibraryDialog.tsx`，复用 `MediaLibraryDialog` 的样式类（音频没有图片，缩略图用音符图标占位）。入口在视频导出弹窗「我的音频」音源那一行：「音效库（N）」按钮，只在浏览器存储可用时显示。
+
+- `onUpload`：外层 App 负责「FileReader 转 data URL → decode 取时长 → createSoundAsset → 入库」，返回落库后的名字用于回执。
+- `onPick`：选中后 decode 填 `customSound`，并 `touchSoundAsset` 记一次使用，然后关弹窗。
+- 改名、删除与素材库同款：行内 `Input` 改名（Enter 提交 / Escape 取消），`putSoundAssets` / `deleteSoundAssetRecord` 增量写库。
+
+### 行为变化
+
+- 自定义提示音现在跨会话持久：换对话、刷新、重新导入都不丢，从「音效库」点一下就能再用。
+- 「发送音效始终用内置合成音」这条规则不变：选中的音效只替换「收到消息」那一声（`customSoundReplaces` 仍是 `received` 专属）。
+- 音效库独立于项目，和素材库、头像归档一样在 App 里单独加载一次，一边失败不拖累另一边；存储不可用时入口整体隐藏，但「选择音频」这个一次性上传仍照常可用。
+
+## 2026-09-20 收发提示音都可替换 + 预览音效替换
+
+需求是「收发消息音效都可以选择上传的音效，音效上传以后要保存下来，可手动删除改名，预览时的节奏音效也要能支持替换」。上一节的音效库已经覆盖「保存 / 改名 / 删除」，这一轮把「只能替换收到那一声」的限制拆掉，并让预览播放条也能直接选音效。
+
+### 逻辑层：按类各自替换（notify-sound.ts）
+
+- `NotifyPlayerOptions.buffer` 升级为 `buffers?: Partial<Record<NotifyKind, AudioBuffer | null>>`：给了哪类就替换哪类，没给的退回内置合成音。旧的 `buffer` 字段保留为兼容别名（等价 `buffers.received`），由 `resolveCustomBuffers()` 归并，新旧同时给时新的优先。
+- `customSoundReplaces(kind, buffers)` 语义随之从「received 专属」改为「这一类给没给」；`chat-video-recorder` 的 `ChatVideoAudioOptions.buffer` 同步改为 `buffers`。
+
+### 状态：customSound → customSounds（App.tsx）
+
+`customSounds: { received: CustomSoundEntry | null; sent: CustomSoundEntry | null }`，每条带 `id?` 指回音效库记录：
+
+- 选用（`handlePickSound`）：按 `soundPickTarget`（received / sent）填进对应那一条，`AudioBuffer` 由音效库的 data URL 现场解码。
+- 删除（`handleRemoveSound`）：正在用的那条被删时，对应提示音退回内置合成音，不留播不出来的 buffer。
+- 改名（`handleRenameSound`）：正在用的那条改名时，界面上的「已选：xxx」同步更新。
+- 预览播放与视频导出走同一份 `customSounds`，`soundSource === 'custom'` 时收/发各自替换。
+
+### 入口：预览播放条 + 视频导出弹窗
+
+- `ChatPlaybackBar`（预览侧）折叠面板新增「音源」段控（内置 / 我的音频）；选「我的音频」后，「收到」「发送」两行的说明文字各变成一个选音效按钮（显示当前音效名，点击打开音效库，挑给对应那一声）。
+- `VideoExportDialog` 的提示音区改为按收/发两行各给「选择音频 / 更换」+「音效库」按钮（`SoundKindActions`），隐藏 file input 用 `fileKindRef` 记住这次传给谁；哪一类开了开关又选了「我的音频」但没挑音频，才阻止生成（`customReady`）。
+- `SoundLibraryDialog` 增加 `pickTargetLabel`，弹窗说明会写明「这次选中的音效会替换『收到/发送消息』那一声」。
+
+### 行为变化
+
+- 「发送音效始终用内置合成音」的旧规则废止：现在发送那一声也可以换成自己的音频；没选的那类仍自动退回内置合成音，收发不会混成同一个声音。
+- 预览播放（定时发送）现在与导出视频用同一套自定义音源，录屏听感一致。
+- 单测从 189 增至 190：`customSoundReplaces` 按新语义重写，另加 `resolveCustomBuffers` 的新旧入参归并用例。
 

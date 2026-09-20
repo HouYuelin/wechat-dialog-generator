@@ -1,5 +1,5 @@
 /**
- * 素材库：把上传过的头像和表情图片留下来，下次直接从库里选，不用再翻本地文件。
+ * 素材库：把上传过的头像、表情图片和背景图留下来，下次直接从库里选，不用再翻本地文件。
  *
  * 这里只管「怎么记、怎么挑、怎么淘汰」，不碰浏览器存储（落库见 project-store 的
  * media-assets store）也不碰 DOM（读文件、压缩见 image-file.ts）。所有函数都是纯的，
@@ -7,22 +7,24 @@
  *
  * 两条排序各管一件事，别混用：
  * - `sortMediaAssets`（createdAt 倒序）给素材库网格用，列表稳定，点选时不会在光标底下跳来跳去；
- * - `recentMediaAssets`（usedAt 倒序）给编辑区的快捷条和 LRU 淘汰用，最近用过的排前面。
+ * - `recentMediaAssets`（usedAt 倒序）给编辑区的快捷条用，最近用过的排前面。
  */
 import type { ChatUser } from '../types'
 
-export type MediaKind = 'avatar' | 'sticker'
+export type MediaKind = 'avatar' | 'sticker' | 'background'
 
-export const mediaKinds: MediaKind[] = ['avatar', 'sticker']
+export const mediaKinds: MediaKind[] = ['avatar', 'sticker', 'background']
 
 export const mediaKindLabels: Record<MediaKind, string> = {
   avatar: '头像',
   sticker: '表情图片',
+  background: '背景图',
 }
 
 export const mediaKindUnits: Record<MediaKind, string> = {
   avatar: '个头像',
   sticker: '张表情',
+  background: '张背景',
 }
 
 export interface MediaAsset {
@@ -35,15 +37,19 @@ export interface MediaAsset {
   width: number
   height: number
   createdAt: string
-  /** 最近一次被使用的时刻，只用于排序和淘汰。 */
+  /** 最近一次被使用的时刻，只用于排序。 */
   usedAt: string
 }
 
-/** 每一类最多留这么多张，超出时淘汰最久没用过的。 */
-export const maxAssetsPerKind = 80
+/**
+ * 每一类最多留这么多张。到顶之后只是不再收录新图，**库里已有的素材永远不会被自动清掉**——
+ * 删除只有一个入口：用户在列表里点删除。曾经按「最久没用过」自动淘汰，结果用户攒的
+ * 头像会莫名其妙少几张，找不回来也说不清是谁删的，所以这条规则整个去掉了。
+ */
+export const maxAssetsPerKind = 2000
 
 export function isMediaKind(value: unknown): value is MediaKind {
-  return value === 'avatar' || value === 'sticker'
+  return value === 'avatar' || value === 'sticker' || value === 'background'
 }
 
 /**
@@ -175,14 +181,16 @@ export interface AddMediaAssetsResult {
   added: MediaAsset[]
   /** 库里已经有一模一样的图，跳过的数量。 */
   duplicated: number
-  /** 撞上单类上限被挤掉的旧素材数量。 */
-  evicted: number
+  /** 这一类已经满了、这一批没能入库的数量。库里原有的素材不受影响。 */
+  rejected: number
 }
 
 /**
- * 往库里加素材：先按 dataUrl 去重（同一张图传两次不该变两条），
- * 再按上限分别截断两类：先淘汰库里最久没用过的旧图，实在还超（一次传了上百张）才丢本批多余的，
- * 保证「刚上传的不会被自己的批量操作挤掉」。入参与返回值都是新数组，不改原库。
+ * 往库里加素材：先按 dataUrl 去重（同一张图传两次不该变两条），再按上限收录。
+ *
+ * 上限是「不许再进」，不是「进来就把旧的挤出去」：库里已有的素材一张都不会被自动删掉，
+ * 满了就是这一批多出来的收不下，如实回报张数。这样用户攒的头像只会因为自己点删除而消失。
+ * 入参与返回值都是新数组，不改原库；一张都收不下时原库原样返回。
  */
 export function addMediaAssets(
   library: MediaAsset[],
@@ -201,37 +209,30 @@ export function addMediaAssets(
     known.add(asset.dataUrl)
     fresh.push(asset)
   }
-  if (!fresh.length) return { library, added: [], duplicated, evicted: 0 }
+  if (!fresh.length) return { library, added: [], duplicated, rejected: 0 }
 
-  const combined = [...library, ...fresh]
-  const freshIds = new Set(fresh.map(asset => asset.id))
-  const survivors = new Set<string>()
-  let evicted = 0
+  // 只数「已经有了多少」，不看新旧、不看用过没用过：存量永远全留，额度才轮到新图。
+  const room = new Map<MediaKind, number>()
   for (const kind of mediaKinds) {
-    const group = combined.filter(asset => asset.kind === kind)
-    if (group.length <= limit) {
-      group.forEach(asset => survivors.add(asset.id))
+    room.set(kind, limit - library.filter(asset => asset.kind === kind).length)
+  }
+  const added: MediaAsset[] = []
+  let rejected = 0
+  for (const asset of fresh) {
+    const left = room.get(asset.kind) ?? 0
+    if (left <= 0) {
+      rejected += 1
       continue
     }
-    // 先保本批新图，再按「最久没用过的先走」排。时间相同就保持原顺序
-    // （combined 里旧库在前，Array.prototype.sort 稳定），结果不会随运行次数漂移。
-    const ranked = [...group].sort((left, right) => {
-      const priority = Number(freshIds.has(right.id)) - Number(freshIds.has(left.id))
-      return priority || timestampOf(right) - timestampOf(left)
-    })
-    ranked.slice(0, limit).forEach(asset => survivors.add(asset.id))
-    evicted += group.length - limit
+    room.set(asset.kind, left - 1)
+    added.push(asset)
   }
+  if (!added.length) return { library, added: [], duplicated, rejected }
 
-  return {
-    library: sortMediaAssets(combined.filter(asset => survivors.has(asset.id))),
-    added: fresh.filter(asset => survivors.has(asset.id)),
-    duplicated,
-    evicted,
-  }
+  return { library: sortMediaAssets([...library, ...added]), added, duplicated, rejected }
 }
 
-/** 记一次「用了这张」，只影响 recentMediaAssets 的顺序和淘汰优先级。 */
+/** 记一次「用了这张」，只影响 recentMediaAssets 的顺序。 */
 export function touchMediaAsset(library: MediaAsset[], id: string, now: Date = new Date()): MediaAsset[] {
   const stamp = now.toISOString()
   let changed = false
@@ -276,27 +277,29 @@ export function assignAvatars(users: ChatUser[], assets: MediaAsset[]): { users:
 }
 
 export interface MediaLibrarySummary {
-  avatar: number
-  sticker: number
+  /** 每个类目的张数。按 MediaKind 取值，加类目时不用再回来改这里。 */
+  counts: Record<MediaKind, number>
   total: number
   bytes: number
 }
 
 export function mediaLibrarySummary(assets: MediaAsset[]): MediaLibrarySummary {
-  return {
-    avatar: assets.filter(asset => asset.kind === 'avatar').length,
-    sticker: assets.filter(asset => asset.kind === 'sticker').length,
-    total: assets.length,
-    bytes: assets.reduce((sum, asset) => sum + dataUrlBytes(asset.dataUrl), 0),
+  const counts = Object.fromEntries(mediaKinds.map(kind => [kind, 0])) as Record<MediaKind, number>
+  let bytes = 0
+  for (const asset of assets) {
+    counts[asset.kind] += 1
+    bytes += dataUrlBytes(asset.dataUrl)
   }
+  return { counts, total: assets.length, bytes }
 }
 
 /** 一行式的库容量说明，弹窗头部和按钮提示共用。 */
 export function mediaLibrarySummaryLabel(summary: MediaLibrarySummary) {
   if (!summary.total) return '还没有素材'
-  const parts: string[] = []
-  if (summary.avatar) parts.push(`${summary.avatar} ${mediaKindUnits.avatar}`)
-  if (summary.sticker) parts.push(`${summary.sticker} ${mediaKindUnits.sticker}`)
+  // 顺序跟着 mediaKinds 走，加类目时文案自动跟上。
+  const parts = mediaKinds
+    .filter(kind => summary.counts[kind] > 0)
+    .map(kind => `${summary.counts[kind]} ${mediaKindUnits[kind]}`)
   return `${parts.join(' · ')} · ${formatBytes(summary.bytes)}`
 }
 
@@ -313,8 +316,8 @@ export interface MediaImportSummary {
   duplicated: number
   /** 读不出来的张数（不是图片、文件损坏）。 */
   failed: number
-  /** 撞上单类上限被移除的旧素材张数。 */
-  evicted: number
+  /** 这一类已经到上限、没能入库的张数。库里原有的素材不会被清掉。 */
+  rejected: number
 }
 
 /** 批量上传后的一句回执：吞掉任何一项都会让人以为「我明明传了 20 张」。 */
@@ -323,6 +326,6 @@ export function mediaImportSummaryText(summary: MediaImportSummary) {
   if (summary.added) parts.push(`已加入 ${summary.added} 张`)
   if (summary.duplicated) parts.push(`跳过 ${summary.duplicated} 张库里已有的`)
   if (summary.failed) parts.push(`${summary.failed} 张读取失败`)
-  if (summary.evicted) parts.push(`已移除 ${summary.evicted} 张最久未用的旧素材`)
+  if (summary.rejected) parts.push(`${summary.rejected} 张超出每类上限未入库（原素材不会被自动清掉，可先手动删几张再传）`)
   return parts.length ? `${parts.join('；')}。` : '没有可加入的图片。'
 }

@@ -1,19 +1,36 @@
 import { useId, useRef, useState } from 'react';
 import { ImagePlus, Settings, Trash2 } from 'lucide-react';
 import type { PhoneSettings } from '@/types';
+import type { MediaAsset } from '@/lib/media-library';
 import { Input } from './ui/input';
 import { SelectField } from './ui/select';
 import { Slider, Switch } from './ui/controls';
 import { ColorField, TimeField } from './ui/color-field';
 import { Button } from './ui/button';
+import { MediaLibraryStrip } from './MediaLibraryDialog';
 
 interface SettingsPanelProps {
   settings: PhoneSettings;
   onSettingsChange: (settings: PhoneSettings) => void;
   disabled?: boolean;
+  /**
+   * 上传背景图：交给外层读文件并顺手存进素材库，返回可直接用的 data URL（读不出来回 null）。
+   * 不传就自己读——批量工具里没有素材库，那里的背景图只跟着项目走。
+   */
+  onUploadBackground?: (file: File) => Promise<string | null>;
+  /** 打开素材库选背景图。不传就不显示素材库这一段。 */
+  onOpenBackgroundLibrary?: () => void;
+  /** 素材库里现有的背景图，用来铺「最近用过」那一行。 */
+  backgroundAssets?: MediaAsset[];
+  /** 从快捷条点了一张背景。除了换上去，外层还要记一次使用，让它排到最前面。 */
+  onBackgroundUsed?: (asset: MediaAsset) => void;
+  libraryEnabled?: boolean;
 }
 
-export function SettingsPanel({ settings, onSettingsChange, disabled = false }: SettingsPanelProps) {
+export function SettingsPanel({
+  settings, onSettingsChange, disabled = false,
+  onUploadBackground, onOpenBackgroundLibrary, backgroundAssets = [], onBackgroundUsed, libraryEnabled = false,
+}: SettingsPanelProps) {
   const fieldId = useId();
   const backgroundInputRef = useRef<HTMLInputElement>(null);
   const [backgroundError, setBackgroundError] = useState('');
@@ -23,7 +40,7 @@ export function SettingsPanel({ settings, onSettingsChange, disabled = false }: 
     onSettingsChange({ ...settings, ...patch });
   };
 
-  const handleBackgroundUpload = (event: React.ChangeEvent<HTMLInputElement>) => {
+  const handleBackgroundUpload = async (event: React.ChangeEvent<HTMLInputElement>) => {
     const file = event.target.files?.[0];
     event.target.value = '';
     if (!file) return;
@@ -35,11 +52,15 @@ export function SettingsPanel({ settings, onSettingsChange, disabled = false }: 
       setBackgroundError('背景图片不能超过 8MB');
       return;
     }
+    setBackgroundError('');
+    if (onUploadBackground) {
+      const dataUrl = await onUploadBackground(file);
+      if (dataUrl) update({ backgroundImage: dataUrl });
+      else setBackgroundError('图片读取失败，请重新选择');
+      return;
+    }
     const reader = new FileReader();
-    reader.onload = () => {
-      setBackgroundError('');
-      update({ backgroundImage: String(reader.result) });
-    };
+    reader.onload = () => update({ backgroundImage: String(reader.result) });
     reader.onerror = () => setBackgroundError('图片读取失败，请重新选择');
     reader.readAsDataURL(file);
   };
@@ -122,7 +143,16 @@ export function SettingsPanel({ settings, onSettingsChange, disabled = false }: 
               <input ref={backgroundInputRef} disabled={disabled} type="file" accept="image/*" hidden onChange={handleBackgroundUpload} />
               {settings.backgroundImage && <img className="chat-background-thumb" src={settings.backgroundImage} alt="当前聊天背景预览" />}
             </div>
-            <small className="form-help">背景仅保存在当前浏览器，截图和长截图都会保留；分享链接不会携带本地图片。</small>
+            {onOpenBackgroundLibrary && (
+              <MediaLibraryStrip
+                assets={backgroundAssets}
+                kind="background"
+                enabled={libraryEnabled && !disabled}
+                onPick={asset => { update({ backgroundImage: asset.dataUrl }); onBackgroundUsed?.(asset); }}
+                onManage={onOpenBackgroundLibrary}
+              />
+            )}
+            <small className="form-help">上传过的背景图会留在素材库里，下次直接点选；背景本身只保存在当前浏览器，截图和长截图都会保留，分享链接不会携带本地图片。</small>
             {backgroundError && <small className="form-error" role="alert">{backgroundError}</small>}
           </div>
         </div>

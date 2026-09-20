@@ -64,6 +64,11 @@
 .media-library-empty p { margin: 0; font-size: 12px; line-height: 1.7; max-width: 340px; }
 .media-library-note { margin-top: 16px; padding-top: 12px; border-top: 1px dashed #d9e3dc; font-size: 10px; line-height: 1.7; color: var(--ml-muted); }
 
+/* 音效库缩略图：音频没有图片，用图标占位。 */
+.sound-library-thumb { display: flex; align-items: center; justify-content: center; cursor: pointer; }
+.sound-library-thumb-icon { display: flex; align-items: center; justify-content: center; color: var(--ml-primary); }
+.sound-library-thumb:hover .sound-library-thumb-icon { color: var(--ml-accent-fg); }
+
 /* 编辑区快捷键：横向缩略图，避免为换一张图反复开弹窗。 */
 .media-library-strip { margin-top: 10px; padding-top: 10px; border-top: 1px dashed var(--studio-border, #e0e7e2); }
 .media-library-strip-head { display: flex; align-items: center; justify-content: space-between; gap: 8px; font-size: 11px; color: var(--studio-muted, #627068); }

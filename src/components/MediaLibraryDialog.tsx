@@ -6,6 +6,7 @@ import { SegmentedControl } from './ui/controls'
 import { Check, Images, PencilLine, Plus, Trash2, Upload, X } from 'lucide-react'
 import { isImageFile } from '@/lib/image-file'
 import {
+  maxAssetsPerKind,
   mediaAssetMeta,
   mediaAssetsOfKind,
   mediaImportSummaryText,
@@ -103,7 +104,7 @@ function MediaLibraryBody({
       <Dialog.Close render={<Button variant="ghost" size="icon" aria-label="关闭素材库" />}><X size={17} /></Dialog.Close>
     </div>
     <Dialog.Description className="media-library-description">
-      {description ?? '上传过的头像和表情都会留在这里，下次直接点选即可，不用再翻本地文件。'}
+      {description ?? '上传过的头像、表情和背景图都会留在这里，下次直接点选即可，不用再翻本地文件。'}
     </Dialog.Description>
 
     <div className="media-library-toolbar">
@@ -207,7 +208,7 @@ function MediaLibraryBody({
     </div>}
 
     <p className="media-library-note">
-      素材只存在这台浏览器里（IndexedDB），不会上传到服务器；每类最多保留 80 张，超出时最久没用过的先被清掉。删掉库里的素材不会影响已经用上的头像与图片。
+      素材只存在这台浏览器里（IndexedDB），不会上传到服务器；每类最多留 {maxAssetsPerKind} 张，到顶后只拒收新图，<b>已保存的素材永远不会自动删除</b>，只有你在这里点删除才会清掉。删素材不会影响已经用上的头像、图片与背景。
     </p>
   </>
 }

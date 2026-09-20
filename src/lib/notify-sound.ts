@@ -1,10 +1,18 @@
 /**
  * 消息提示音。用 Web Audio 现场合成微信风格的收/发两种音效：
- *  - received：收到消息的两音「叮咚」，敲击类音色（基音 + 钟琴式泛音）。
+ *  - received：收到消息的两声「叮咚」，敲击类音色（基音 + 钟琴式泛音）。
  *  - sent：发出消息的「咻」，带通扫频气流声叠一个快速下滑音。
  *
  * 刻意只做**现场合成**，不打包微信原始音频文件——那段音频属于第三方，
  * 嵌进产物会有版权问题。想用原声请走「我的音频」自行上传。
+ *
+ * 调音依据（公开的描述，不是原始录音的频谱）：
+ *  - 微信「叮咚」被官方口径反复描述为「圆润柔和」「温润通透」「不刺耳」，
+ *    并有「和谐大三度音程」「时长 1.2–1.8 秒」的说法；第三方对同一体系的声学报告
+ *    给的能量集中在 800 Hz–2.5 kHz。所以两声取**下行大三度**、基频落在 780–1000 Hz，
+ *    而不是早先那对 1318/988 Hz 的正四度——那个太高太亮，听起来像电子门铃。
+ *  - 「叮咚」这个名字本身就是高→低；iOS 上微信长期沿用系统 Tri-tone，也是下行。
+ *  - 发送音是公认的「嗖」：短促气流声 + 下滑音，长度不到接收音的一半。
  *
  * 两处用途：
  *  - 定时发送播放：直接输出到扬声器，便于用系统录屏软件连声音一起录。
@@ -53,26 +61,37 @@ export type NotifySound = NotifyTone | NotifyWhoosh
  *  - 2 倍泛音给厚度，3 倍补亮度，4.76 倍刻意取非整数，做出敲击的金属光泽；
  *  - 增益依次减半，基音始终最响；
  *  - 衰减系数递减，越高的泛音收得越快——这是敲击音与和弦的分水岭。
+ *
+ * 微信的「叮咚」是温润透亮的木质感，不是玻璃钟——所以最上面那条非整数泛音
+ * 压得很低（0.05）也收得最快（0.22），基频又落在 780–1000 Hz，
+ * 整体能量集中在 800 Hz–2.5 kHz，不往上刺。
  */
 const bellPartials: NotifyPartial[] = [
-  { ratio: 2, gain: 0.32, decay: 0.62 },
-  { ratio: 3, gain: 0.15, decay: 0.42 },
-  { ratio: 4.76, gain: 0.07, decay: 0.26 },
+  { ratio: 2, gain: 0.3, decay: 0.6 },
+  { ratio: 3, gain: 0.13, decay: 0.4 },
+  { ratio: 4.76, gain: 0.05, decay: 0.22 },
 ]
 
-/** 收到消息：先高后低两声「叮咚」。 */
+/**
+ * 收到消息：先高后低两声「叮咚」，隔约 110ms。
+ *
+ * 988 → 784 Hz 是**下行大三度**（B5 → G5）：名字「叮咚」本身就是高→低，
+ * 大三度是公开描述里唯一给出的音程。第二声留得比第一声长一点，
+ * 让它有余韵而不是戛然而止——但也别太长，节奏快时要跟得上（一屏几十条消息）。
+ */
 export const receivedNotifySounds: NotifySound[] = [
-  { freq: 1318.51, offsetMs: 0, durationMs: 200, gain: 0.25, partials: bellPartials },
-  { freq: 987.77, offsetMs: 104, durationMs: 300, gain: 0.23, partials: bellPartials },
+  { freq: 987.77, offsetMs: 0, durationMs: 240, gain: 0.25, partials: bellPartials },
+  { freq: 783.99, offsetMs: 110, durationMs: 430, gain: 0.24, partials: bellPartials },
 ]
 
 /**
  * 发出消息：一声「咻」。气流声占主体，底下垫一个快速下滑音，
  * 让它听成「发出去了一条」而不是单纯一阵风。
+ * 比接收音短、扫得更快，收尾也更干脆。
  */
 export const sentNotifySounds: NotifySound[] = [
-  { kind: 'whoosh', offsetMs: 0, durationMs: 150, gain: 0.17, freqFrom: 2600, freqTo: 820, q: 1.1 },
-  { freq: 1560, freqTo: 520, offsetMs: 6, durationMs: 110, gain: 0.1 },
+  { kind: 'whoosh', offsetMs: 0, durationMs: 130, gain: 0.17, freqFrom: 2200, freqTo: 760, q: 1.25 },
+  { freq: 1650, freqTo: 1050, offsetMs: 4, durationMs: 90, gain: 0.1 },
 ]
 
 export const notifySounds: Record<NotifyKind, NotifySound[]> = {
@@ -81,7 +100,7 @@ export const notifySounds: Record<NotifyKind, NotifySound[]> = {
 }
 
 /** 单次提示音的大致时长，用于决定何时拆掉音频节点。 */
-export const notifySoundDurationMs: Record<NotifyKind, number> = { received: 480, sent: 240 }
+export const notifySoundDurationMs: Record<NotifyKind, number> = { received: 580, sent: 200 }
 
 export const notifyKindLabels: Record<NotifyKind, string> = { received: '收到消息', sent: '发送消息' }
 
@@ -207,7 +226,8 @@ export function playNotify(kind: NotifyKind = 'received', context?: AudioContext
   const player = createNotifyPlayer(target, options)
   player.schedule(target.currentTime + 0.02, kind)
   // 音频图里的节点会被上下文一直持有，播完就断开，避免长时间播放堆积节点。
-  const holdMs = customSoundReplaces(kind, Boolean(options.buffer)) ? (options.buffer!.duration * 1000) + 250 : notifySoundDurationMs[kind] + 150
+  const custom = resolveCustomBuffers(options)[kind]
+  const holdMs = custom ? (custom.duration * 1000) + 250 : notifySoundDurationMs[kind] + 150
   window.setTimeout(() => player.dispose(), holdMs)
 }
 
@@ -217,22 +237,35 @@ export interface NotifyPlayer {
   dispose(): void
 }
 
+/** 每类提示音各自的自定义音频：给了哪类就替换哪类，没给的用内置合成音。 */
+export type NotifyCustomBuffers = Partial<Record<NotifyKind, AudioBuffer | null>>
+
 export interface NotifyPlayerOptions {
   /** 不传则直接出声；视频导出时传入 MediaStreamAudioDestinationNode。 */
   destination?: AudioNode
-  /** 用户上传的提示音，只替换「收到消息」那一声；发送音效始终用内置合成音。 */
+  /** 用户上传的提示音，收发两种各管各的：收到的替换「叮咚」，发送的替换「咻」。 */
+  buffers?: NotifyCustomBuffers
+  /** @deprecated 旧字段，等价于 buffers.received；保留是为了兼容尚未迁移的调用方。 */
   buffer?: AudioBuffer | null
   volume?: number
 }
 
-/** 自定义音频只作用于接收音，保证发送音效永远和它不一样。 */
-export function customSoundReplaces(kind: NotifyKind, hasCustomSound: boolean) {
-  return kind === 'received' && hasCustomSound
+/** 归并新旧两种入参：旧的 buffer 只作用于接收音，新的 buffers 按类各自生效。 */
+export function resolveCustomBuffers(options: NotifyPlayerOptions): NotifyCustomBuffers {
+  const merged: NotifyCustomBuffers = { ...options.buffers }
+  if (options.buffer !== undefined && merged.received === undefined) merged.received = options.buffer
+  return merged
+}
+
+/** 某一类提示音这一声是否被自定义音频替换。 */
+export function customSoundReplaces(kind: NotifyKind, buffers: NotifyCustomBuffers | null | undefined) {
+  return Boolean(buffers?.[kind])
 }
 
 export function createNotifyPlayer(context: AudioContext, options: NotifyPlayerOptions = {}): NotifyPlayer {
   const destination = options.destination ?? context.destination
   const volume = options.volume ?? 1
+  const customBuffers = resolveCustomBuffers(options)
   const pending = new Set<AudioScheduledSourceNode>()
   const master = context.createGain()
   master.gain.value = volume
@@ -248,9 +281,10 @@ export function createNotifyPlayer(context: AudioContext, options: NotifyPlayerO
   return {
     schedule(atSeconds: number, kind: NotifyKind = 'received') {
       const start = Math.max(atSeconds, context.currentTime)
-      if (customSoundReplaces(kind, Boolean(options.buffer))) {
+      const custom = customBuffers[kind]
+      if (customSoundReplaces(kind, customBuffers) && custom) {
         const source = context.createBufferSource()
-        source.buffer = options.buffer!
+        source.buffer = custom
         source.connect(master)
         source.start(start)
         track([source])

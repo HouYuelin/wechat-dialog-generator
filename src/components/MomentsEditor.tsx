@@ -8,16 +8,27 @@ import { WechatPhoneChrome } from '@/components/WechatPhoneChrome'
 import { WorkspacePanels } from './WorkspacePanels'
 import { beginExportLog } from '@/lib/export-log'
 import { ScenePreviewFrame } from './ScenePreviewFrame'
+import { MediaLibraryStrip } from './MediaLibraryDialog'
 import { ColorField } from './ui/color-field'
 import { Input } from './ui/input'
 import { Textarea } from './ui/textarea'
 import { Button } from './ui/button'
+import type { MediaAsset } from '@/lib/media-library'
 import './SceneWorkspace.css'
 
 interface MomentsEditorProps {
   onToast: (message: string) => void
   onBeforeExport?: () => Promise<boolean | string>
   onExportSuccess?: (ticket?: boolean | string) => void
+  /** 上传封面图：交给外层读文件并顺手存进素材库，返回可直接用的 data URL（读不出来回 null）。 */
+  onUploadCover?: (file: File) => Promise<string | null>;
+  /** 打开素材库挑一张封面，返回选中的图；关掉弹窗没选就回 null。不传则不显示素材库这一段。 */
+  onPickCover?: () => Promise<string | null>;
+  /** 素材库里现有的背景图，用来铺「最近用过」那一行。 */
+  backgroundAssets?: MediaAsset[];
+  /** 从快捷条点了一张背景。除了换上去，外层还要记一次使用，让它排到最前面。 */
+  onBackgroundUsed?: (asset: MediaAsset) => void;
+  libraryEnabled?: boolean;
 }
 
 function fileAsDataUrl(file: File) {
@@ -29,7 +40,10 @@ function fileAsDataUrl(file: File) {
   })
 }
 
-export function MomentsEditor({ onToast, onBeforeExport, onExportSuccess }: MomentsEditorProps) {
+export function MomentsEditor({
+  onToast, onBeforeExport, onExportSuccess,
+  onUploadCover, onPickCover, backgroundAssets = [], onBackgroundUsed, libraryEnabled = false,
+}: MomentsEditorProps) {
   const [draft, setDraft] = useState<MomentProject>(emptyMoment)
   const [ready, setReady] = useState(false)
   const [saved, setSaved] = useState(false)
@@ -90,12 +104,26 @@ export function MomentsEditor({ onToast, onBeforeExport, onExportSuccess }: Mome
       setCoverError('背景图片不能超过 8 MB')
       return
     }
+    // 有素材库时统一走外层：同一个入口既换封面、也把图留在库里，下次直接点选。
+    if (onUploadCover) {
+      const dataUrl = await onUploadCover(file)
+      if (dataUrl) update('coverImage', dataUrl)
+      else setCoverError('背景图片读取失败，请重新选择')
+      return
+    }
     try {
       update('coverImage', await fileAsDataUrl(file))
     } catch {
       setCoverError('背景图片读取失败，请重新选择')
     }
-  }, [update])
+  }, [onUploadCover, update])
+
+  /** 打开素材库选封面。没选就关掉时回 null，这里当作用户放弃，什么都不动。 */
+  const pickCover = useCallback(async () => {
+    if (!onPickCover) return
+    const dataUrl = await onPickCover()
+    if (dataUrl) update('coverImage', dataUrl)
+  }, [onPickCover, update])
 
   const addLikes = useCallback(() => {
     const names = likeInput.split(/[、,，\s]+/).map(item => item.trim()).filter(Boolean)
@@ -211,7 +239,16 @@ export function MomentsEditor({ onToast, onBeforeExport, onExportSuccess }: Mome
               <input ref={coverInputRef} type="file" accept="image/*" hidden onChange={event => { void handleCover(event.target.files?.[0]); event.currentTarget.value = '' }} />
               {draft.coverImage && <img className="chat-background-thumb" src={draft.coverImage} alt="当前朋友圈背景预览" />}
             </div>
-            <small className="form-helper">背景仅保存在当前浏览器，导出的朋友圈图片会保留。</small>
+            {onPickCover && (
+              <MediaLibraryStrip
+                assets={backgroundAssets}
+                kind="background"
+                enabled={libraryEnabled}
+                onPick={asset => { update('coverImage', asset.dataUrl); onBackgroundUsed?.(asset) }}
+                onManage={() => { void pickCover() }}
+              />
+            )}
+            <small className="form-helper">上传过的背景图会留在素材库里，下次直接点选；背景本身只保存在当前浏览器，导出的朋友圈图片会保留。</small>
             {coverError && <small className="form-error" role="alert">{coverError}</small>}
           </div>
           </div>

@@ -1,8 +1,11 @@
-import { useRef } from 'react';
-import { Users, Upload, X, UserCheck, Images } from 'lucide-react';
+import { useRef, useState } from 'react';
+import { Users, Upload, X, UserCheck, Images, History, RotateCcw, Trash2, PencilLine } from 'lucide-react';
 import { getDefaultAvatar } from '@/lib/parser';
+import { avatarNameKey } from '@/lib/user-avatars';
+import type { AvatarPreset } from '@/lib/avatar-presets';
 import type { ChatUser } from '@/types';
 import { Button } from './ui/button';
+import { Input } from './ui/input';
 
 interface UserAvatarManagerProps {
   users: ChatUser[];
@@ -21,6 +24,16 @@ interface UserAvatarManagerProps {
   /** 素材库里现有的头像数量，显示在按钮上。 */
   libraryAvatarCount?: number;
   libraryEnabled?: boolean;
+  /** 用过的头像归档：按角色名长期留着，只增不删。 */
+  avatarPresets?: AvatarPreset[];
+  /** 归档读出来了才放出这一段的入口。 */
+  presetsEnabled?: boolean;
+  /** 把归档里的这张头像还给同名的角色。 */
+  onUsePreset?: (preset: AvatarPreset) => void;
+  /** 给归档里的某一条改名字。返回 false 表示没改成（外层已经提示过原因），输入框留在原地让用户接着改。 */
+  onRenamePreset?: (preset: AvatarPreset, name: string) => boolean;
+  /** 从归档里删掉一条，只手动触发。 */
+  onRemovePreset?: (preset: AvatarPreset) => void;
 }
 
 function AvatarCard({ user, index, isSelf, onUpdateAvatar, onRemoveAvatar, onSetSelf, onUploadAvatar, onOpenLibrary }: {
@@ -84,9 +97,19 @@ function AvatarCard({ user, index, isSelf, onUpdateAvatar, onRemoveAvatar, onSet
 export function UserAvatarManager({
   users, selfId, onUpdateAvatar, onRemoveAvatar, onSetSelf,
   onUploadAvatar, onBatchUpload, onOpenLibrary, onManageLibrary, libraryAvatarCount = 0, libraryEnabled = false,
+  avatarPresets = [], presetsEnabled = false, onUsePreset, onRenamePreset, onRemovePreset,
 }: UserAvatarManagerProps) {
   const batchRef = useRef<HTMLInputElement>(null);
+  // 改名用的是行内输入框，正在改哪一条、草稿是什么都放在这里；换一条点就是换一个 id。
+  const [renamingId, setRenamingId] = useState<string | null>(null);
+  const [renameDraft, setRenameDraft] = useState('');
   if (users.length === 0) return null;
+
+  const commitRename = (preset: AvatarPreset) => {
+    const accepted = onRenamePreset?.(preset, renameDraft);
+    // 没改成（重名、空名字）就把输入框留着，用户不用重新点一次铅笔。
+    if (accepted !== false) setRenamingId(null);
+  };
 
   return (
     <div className="s-card">
@@ -95,7 +118,7 @@ export function UserAvatarManager({
         <span className="s-card-badge">{users.length} 个用户</span>
       </div>
       <div className="s-card-body">
-        <p style={{ fontSize: 12, color: 'var(--control-muted)', marginBottom: 14 }}>点击头像可上传自定义图片；上传过的都会留在素材库，下次直接点选。</p>
+        <p style={{ fontSize: 12, color: 'var(--control-muted)', marginBottom: 14 }}>点击头像可上传自定义图片；上传过的都会留在素材库，用过的头像还会按角色名单独存一份，换对话也不会丢。</p>
         {(onBatchUpload || (libraryEnabled && onManageLibrary)) && (
           <div className="avatar-toolbar">
             <input
@@ -134,6 +157,67 @@ export function UserAvatarManager({
           ))}
         </div>
       </div>
+      {presetsEnabled && avatarPresets.length > 0 && <div className="avatar-preset-section">
+        <div className="avatar-preset-head">
+          <h3><History size={15} /> 用过的头像<span className="avatar-preset-count">{avatarPresets.length}</span></h3>
+          <small>按角色名长期保留：换对话、重新导入、清空编辑器都不会自动清掉，重新导入时同名的角色还会自动对回来。可以在每一条上改名或删除。</small>
+        </div>
+        <ul className="avatar-preset-list">
+          {avatarPresets.map(preset => {
+            const owner = users.find(user => avatarNameKey(user.name) === avatarNameKey(preset.name));
+            const inUse = Boolean(owner) && owner?.avatar === preset.avatar;
+            if (renamingId === preset.id) return <li key={preset.id} className="avatar-preset-item avatar-preset-item-editing">
+              <span className="avatar-preset-thumb"><img src={preset.avatar} alt={preset.name} /></span>
+              <Input
+                className="avatar-preset-rename"
+                aria-label={`重命名用过的头像 ${preset.name}`}
+                autoFocus
+                value={renameDraft}
+                maxLength={60}
+                onChange={event => setRenameDraft(event.target.value)}
+                onKeyDown={event => {
+                  if (event.key === 'Enter') { event.preventDefault(); commitRename(preset); }
+                  if (event.key === 'Escape') { event.preventDefault(); setRenamingId(null); }
+                }}
+                onBlur={() => commitRename(preset)}
+              />
+            </li>;
+            return <li key={preset.id} className="avatar-preset-item">
+              <span className="avatar-preset-thumb"><img src={preset.avatar} alt={preset.name} /></span>
+              <span className="avatar-preset-name" title={preset.name}>{preset.name}</span>
+              {owner && onUsePreset
+                ? <Button
+                  variant="outline"
+                  size="sm"
+                  type="button"
+                  className="avatar-mini-btn"
+                  aria-label={`把这张头像还给${owner.name}`}
+                  title={`把这张头像还给「${owner.name}」`}
+                  onClick={() => onUsePreset(preset)}
+                ><RotateCcw size={12} /> {inUse ? '已用' : '用上'}</Button>
+                : <span className="avatar-preset-tag" title="当前对话里没有这个角色，这张头像先留在归档里">仅保存</span>}
+              {onRenamePreset && <Button
+                variant="ghost"
+                size="icon"
+                type="button"
+                className="avatar-preset-rename-btn"
+                aria-label={`重命名用过的头像 ${preset.name}`}
+                title="给这条记录改名"
+                onClick={() => { setRenamingId(preset.id); setRenameDraft(preset.name); }}
+              ><PencilLine size={14} /></Button>}
+              {onRemovePreset && <Button
+                variant="ghost"
+                size="icon"
+                type="button"
+                className="avatar-preset-delete"
+                aria-label={`删除用过的头像 ${preset.name}`}
+                title="从用过的头像里删除"
+                onClick={() => onRemovePreset(preset)}
+              ><Trash2 size={14} /></Button>}
+            </li>;
+          })}
+        </ul>
+      </div>}
     </div>
   );
 }

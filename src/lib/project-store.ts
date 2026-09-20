@@ -1,14 +1,18 @@
 import type { ChatMessage, ChatUser, PhoneSettings } from '@/types'
+import { normalizeAvatarPresets, type AvatarPreset } from './avatar-presets'
 import { normalizeMediaLibrary, type MediaAsset } from './media-library'
+import { normalizeSoundLibrary, type SoundAsset } from './sound-library'
 
 const databaseName = 'wechat-dialog-generator'
-// 素材库（media-assets）是版本 4 新加的 store；升版本号时记得在这里把新 store 一并建出来，
-// 否则老用户升级上来会打开一个缺 store 的库，读素材直接抛错。
-const databaseVersion = 4
+// 素材库（media-assets）是版本 4 加上的，头像归档（avatar-presets）是版本 5，音效库（sound-assets）是版本 6。
+// 升版本号时记得在这里把新 store 一并建出来，否则老用户升级上来会打开一个缺 store 的库，读它直接抛错。
+const databaseVersion = 6
 const projectStore = 'projects'
 const momentStore = 'moment-projects'
 const sceneStore = 'scene-projects'
 const mediaAssetStore = 'media-assets'
+const avatarPresetStore = 'avatar-presets'
+const soundAssetStore = 'sound-assets'
 
 export const activeProjectStorageKey = 'wechat-dialog-generator:active-project'
 
@@ -85,6 +89,12 @@ function openDatabase() {
         const store = database.createObjectStore(mediaAssetStore, { keyPath: 'id' })
         store.createIndex('kind', 'kind')
       }
+      if (!database.objectStoreNames.contains(avatarPresetStore)) {
+        database.createObjectStore(avatarPresetStore, { keyPath: 'id' })
+      }
+      if (!database.objectStoreNames.contains(soundAssetStore)) {
+        database.createObjectStore(soundAssetStore, { keyPath: 'id' })
+      }
     }
     request.onsuccess = () => resolve(request.result)
     request.onerror = () => reject(request.error ?? new Error('Unable to open IndexedDB'))
@@ -132,6 +142,48 @@ export async function putMediaAssets(assets: MediaAsset[]) {
 
 export async function deleteMediaAssetRecord(id: string) {
   await withNamedStore(mediaAssetStore, 'readwrite', store => store.delete(id))
+}
+
+/**
+ * 读出用过的头像归档。和素材库一样独立于项目：换项目、重新导入、清空编辑器都不该影响它。
+ */
+export async function loadAvatarPresets() {
+  const stored = await withNamedStore<unknown[]>(avatarPresetStore, 'readonly', store => store.getAll())
+  return normalizeAvatarPresets(stored)
+}
+
+/** 增量写入改动过的那几条，不重写整份归档。 */
+export async function putAvatarPresets(presets: AvatarPreset[]) {
+  if (!presets.length) return
+  await withNamedStore(avatarPresetStore, 'readwrite', store => {
+    for (const preset of presets) store.put(preset)
+    return store.count()
+  })
+}
+
+export async function deleteAvatarPresetRecord(id: string) {
+  await withNamedStore(avatarPresetStore, 'readwrite', store => store.delete(id))
+}
+
+/**
+ * 读出音效库。和素材库、头像归档一样独立于项目：换项目、重新导入、清空编辑器都不该影响它。
+ */
+export async function loadSoundAssets() {
+  const stored = await withNamedStore<unknown[]>(soundAssetStore, 'readonly', store => store.getAll())
+  return normalizeSoundLibrary(stored)
+}
+
+/** 增量写入改动过的那几条，不重写整份音效库。 */
+export async function putSoundAssets(assets: SoundAsset[]) {
+  if (!assets.length) return
+  await withNamedStore(soundAssetStore, 'readwrite', store => {
+    for (const asset of assets) store.put(asset)
+    return store.count()
+  })
+}
+
+export async function deleteSoundAssetRecord(id: string) {
+  await withNamedStore(soundAssetStore, 'readwrite', store => store.delete(id))
 }
 
 async function withNamedStore<T>(
