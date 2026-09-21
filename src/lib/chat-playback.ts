@@ -51,10 +51,12 @@ export interface PaceSetting {
   gaps: number[]
   /** 首条消息出现前的静置时长（毫秒），可设成 0 让第一条立刻出来。 */
   leadInMs: number
+  /** 末条消息之后的结尾留白时长（毫秒），也就是最后那一帧停多久。 */
+  tailMs: number
 }
 
 export function defaultPaceSetting(): PaceSetting {
-  return { mode: 'uniform', paceMs: defaultPaceMs, gaps: [], leadInMs: defaultLeadInMs }
+  return { mode: 'uniform', paceMs: defaultPaceMs, gaps: [], leadInMs: defaultLeadInMs, tailMs: defaultTailMs }
 }
 
 /** 收到消息与发送消息的音效各自可选，默认只响「收到」那一声。 */
@@ -80,8 +82,18 @@ export const playbackLeadInMs = defaultLeadInMs
  * 末条消息之后的留白，也就是「结尾那一帧」的停留时间。
  * 3 秒是录屏和导出视频都够用的收尾时间：视频的最后一帧正好停这么久，
  * 手动录屏时也有余量按下停止键。预览播放与导出一致，只改这一处。
+ *
+ * 现在这个值不再写死：它作为 `tailMs` 收进了节奏设置（PaceSetting），
+ * 用户可以在「结尾时长」滑杆里调。3 秒仍然是出厂默认值与兼容别名，
+ * 老偏好里没有这个字段时退回它。
  */
 export const playbackTailMs = 3000
+/** 结尾留白的范围与步长（毫秒）：0–10 秒，每格 0.1 秒。 */
+export const minTailMs = 0
+export const maxTailMs = 10000
+export const tailStepMs = 100
+/** 结尾时长的出厂默认值，等于 playbackTailMs，供 defaultPaceSetting 与清洗共用。 */
+export const defaultTailMs = playbackTailMs
 /** 逐帧预渲染的开销随条数线性增长，超过这个条数请拆分成多个对话导出。 */
 export const maxVideoMessages = 120
 
@@ -109,6 +121,12 @@ export function clampLeadInMs(value: number) {
   return Math.min(maxLeadInMs, Math.max(minLeadInMs, roundToStep(value, leadInStepMs)))
 }
 
+/** 结尾时长：0–10 秒，NaN 退回默认值（0 表示最后一条消息之后立刻收尾）。 */
+export function clampTailMs(value: number) {
+  if (!Number.isFinite(value)) return defaultTailMs
+  return Math.min(maxTailMs, Math.max(minTailMs, roundToStep(value, tailStepMs)))
+}
+
 /** 读回来的值不能全信：存储被手改过、旧版本没有这个字段都会走到这里。 */
 export function normalizePaceMs(value: unknown) {
   return typeof value === 'number' ? clampPaceMs(value) : defaultPaceMs
@@ -130,6 +148,7 @@ export function normalizePaceSetting(raw: unknown): PaceSetting {
     paceMs: normalizePaceMs(source.paceMs),
     gaps: normalizePaceGapList(source.gaps),
     leadInMs: typeof source.leadInMs === 'number' ? clampLeadInMs(source.leadInMs) : defaultLeadInMs,
+    tailMs: typeof source.tailMs === 'number' ? clampTailMs(source.tailMs) : defaultTailMs,
   }
 }
 

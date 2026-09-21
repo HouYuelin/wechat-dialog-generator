@@ -324,13 +324,21 @@ function App() {
   /**
    * 恢复上次选的音效：偏好里只存得下音效库的 id，得等库读出来才知道那一条还在不在，
    * 所以放在库就绪之后。id 对应不上（音效被删了）就什么都不做 —— 播放侧本来就会退回内置合成音。
+   *
+   * 注意 `soundRestored` 必须在「恢复真的做完」（成功也好、没得恢复也好）之后才置 true：
+   * 偏好保存 effect 用它判断「现在能不能把 customSounds 的 id 写回 soundIds」。若像以前那样
+   * 在解码前就置 true，解码期间任何一次无关的重渲染都会用当时还是空的 customSounds 覆盖掉
+   * 上次选的 id，表现为「选过的音效刷新后丢了、每次都要重新选」。
    */
   useEffect(() => {
     if (!soundLibraryReady || soundRestored.current) return;
-    soundRestored.current = true;
     // 这里只解码不播放，音频上下文处于 suspended 也没关系：decodeAudioData 与上下文状态无关。
     const context = notifyAudioContext();
-    if (!context) return;
+    if (!context) {
+      // 拿不到音频上下文就不可能有已选音效可恢复，标记为已尝试过，别让偏好一直锁在旧值。
+      soundRestored.current = true;
+      return;
+    }
     const ids = getWorkspacePrefs().playback.soundIds;
     void (async () => {
       const restored: { kind: NotifyKind; entry: CustomSoundEntry }[] = [];
@@ -345,12 +353,15 @@ function App() {
           // 这一条读不出来就跳过，另一条照常恢复。
         }
       }
-      if (!restored.length) return;
-      setCustomSounds(previous => {
-        const next = { ...previous };
-        for (const { kind, entry } of restored) next[kind] = entry;
-        return next;
-      });
+      if (restored.length) {
+        setCustomSounds(previous => {
+          const next = { ...previous };
+          for (const { kind, entry } of restored) next[kind] = entry;
+          return next;
+        });
+      }
+      // 恢复流程走完（无论有没有真的恢复出东西）才放行偏好写回，避免覆盖上一次的 id。
+      soundRestored.current = true;
     })();
   }, [soundLibrary, soundLibraryReady]);
 
@@ -904,6 +915,10 @@ function App() {
     // 导入过的角色名收进「最近用过的昵称」：换聊天标题、发朋友圈、做场景页时能直接点选。
     // 「我」是解析器给自己起的别名，不算用户用过的昵称，不塞进历史。
     rememberNameHistory(result.users.map(user => user.name).filter(name => !isSelfAlias(name)));
+    // 手机样式里的时间跟着导入刷新成系统当前时间（HH:MM，24 小时制），让状态栏看起来是「此刻」。
+    const now = new Date();
+    const currentTime = `${String(now.getHours()).padStart(2, '0')}:${String(now.getMinutes()).padStart(2, '0')}`;
+    setSettings(s => ({ ...s, time: currentTime }));
     if (result.users.length >= 3) {
       const otherNames = result.users.slice(1).map(u => u.name);
       const nameStr = result.users.length <= 4
@@ -1223,6 +1238,7 @@ function App() {
       paceMode: paceSetting.mode,
       messageGaps: paceSetting.gaps,
       leadInMs: paceSetting.leadInMs,
+      tailMs: paceSetting.tailMs,
       selfId,
       notifyReceived: soundReceive,
       notifySent: soundSend,

@@ -284,7 +284,7 @@ function canonical(prefs: WorkspacePrefs) {
     style.wifiEnabled, style.battery, style.unreadCount,
     style.selfBubbleColor, style.otherBubbleColor, style.backgroundColor, style.backgroundImage,
     style.imageMax, style.fontScale,
-    playback.pace.mode, playback.pace.paceMs, playback.pace.gaps.join('|'), playback.pace.leadInMs, playback.soundEnabled, playback.soundReceive, playback.soundSend,
+    playback.pace.mode, playback.pace.paceMs, playback.pace.gaps.join('|'), playback.pace.leadInMs, playback.pace.tailMs, playback.soundEnabled, playback.soundReceive, playback.soundSend,
     playback.soundSource, playback.soundIds.received, playback.soundIds.sent,
     playback.screenSize.width, playback.screenSize.height,
     playback.videoSize, playback.videoMode, playback.scrollDuration, playback.videoSidePad, playback.batchOutput,

@@ -8,7 +8,7 @@
  *
  * 与素材库的一点差异：音效是音频，不是图片。所以存储用的是 audio data URL
  * （`data:audio/...;base64,...`），而不是 image data URL；使用时再 decodeAudioData
- * 还原成 AudioBuffer。自定义音效目前只替换「收到消息」那一声，发送音效始终用内置合成音。
+ * 还原成 AudioBuffer。收到与发送两种音效都可以换成自定义音效，各自独立选。
  */
 export interface SoundAsset {
   id: string

@@ -5,15 +5,19 @@ import {
   clampLeadInMs,
   clampPaceGapMs,
   clampPaceMs,
+  clampTailMs,
   defaultLeadInMs,
   defaultPaceMs,
+  defaultTailMs,
   frameIndexAt,
   maxGapMs,
   maxLeadInMs,
   maxPaceMs,
+  maxTailMs,
   messageGapLabel,
   minGapMs,
   minPaceMs,
+  minTailMs,
   normalizeMessageGaps,
   normalizePaceMs,
   normalizePaceSetting,
@@ -131,6 +135,12 @@ test('统一间隔夹在 0.5–3 秒、逐条间隔夹在 0.2–10 秒，都对�
   assert.equal(clampLeadInMs(1500), 1500)
   assert.equal(clampLeadInMs(9999), maxLeadInMs)
   assert.equal(clampLeadInMs(Number.NaN), defaultLeadInMs, 'NaN 退回默认值')
+  assert.equal(clampTailMs(0), 0, '结尾时长可以压到 0')
+  assert.equal(clampTailMs(3000), 3000)
+  assert.equal(clampTailMs(9999), maxTailMs, '结尾时长夹到上限 10 秒')
+  assert.equal(clampTailMs(Number.NaN), defaultTailMs, 'NaN 退回默认值')
+  assert.equal(minTailMs, 0)
+  assert.equal(defaultTailMs, 3000)
 })
 
 test('duration label rounds up to the next half second', () => {
@@ -174,13 +184,16 @@ test('逐条间隔列表按消息条数补齐：越界夹取、脏值按统一�
 })
 
 test('节奏设置读回来时逐项清洗', () => {
-  assert.deepEqual(normalizePaceSetting(undefined), { mode: 'uniform', paceMs: defaultPaceMs, gaps: [], leadInMs: 1200 })
-  assert.deepEqual(normalizePaceSetting({ mode: 'perMessage', paceMs: 2460, gaps: [0, 60_000] }), { mode: 'perMessage', paceMs: 2500, gaps: [minGapMs, maxGapMs], leadInMs: 1200 })
-  assert.deepEqual(normalizePaceSetting({ mode: 'fast' }), { mode: 'uniform', paceMs: defaultPaceMs, gaps: [], leadInMs: 1200 }, '旧的档位字符串在这一层读不出来，由偏好那一层折算成毫秒')
+  assert.deepEqual(normalizePaceSetting(undefined), { mode: 'uniform', paceMs: defaultPaceMs, gaps: [], leadInMs: 1200, tailMs: 3000 })
+  assert.deepEqual(normalizePaceSetting({ mode: 'perMessage', paceMs: 2460, gaps: [0, 60_000] }), { mode: 'perMessage', paceMs: 2500, gaps: [minGapMs, maxGapMs], leadInMs: 1200, tailMs: 3000 })
+  assert.deepEqual(normalizePaceSetting({ mode: 'fast' }), { mode: 'uniform', paceMs: defaultPaceMs, gaps: [], leadInMs: 1200, tailMs: 3000 }, '旧的档位字符串在这一层读不出来，由偏好那一层折算成毫秒')
   assert.deepEqual(normalizePaceSetting({ mode: 'perMessage' }).gaps, [], '逐条列表缺失就是空的，等按消息条数补齐')
   assert.equal(normalizePaceSetting({ leadInMs: 0 }).leadInMs, 0, '开场静置可设成 0')
   assert.equal(normalizePaceSetting({ leadInMs: 9999 }).leadInMs, maxLeadInMs, '开场静置夹到上限')
   assert.equal(normalizePaceSetting({ leadInMs: Number.NaN }).leadInMs, defaultLeadInMs, 'NaN 退回默认值')
+  assert.equal(normalizePaceSetting({ tailMs: 0 }).tailMs, 0, '结尾时长可设成 0')
+  assert.equal(normalizePaceSetting({ tailMs: 9999 }).tailMs, maxTailMs, '结尾时长夹到上限')
+  assert.equal(normalizePaceSetting({ tailMs: Number.NaN }).tailMs, defaultTailMs, 'NaN 退回默认值')
 })
 
 test('旧的快 / 标准 / 慢三档折算成毫秒', () => {
