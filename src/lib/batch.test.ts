@@ -55,6 +55,18 @@ test('accepts variable separators, Markdown headings and fenced AI output', () =
   assert.throws(() => parseBatch('# 空组\n# 有内容\n我：你好'), /没有有效对话/)
 })
 
+test('批量不放宽：整组没写「名字：」照旧报错，多出来的散行跟着上一位说话人', () => {
+  // 聊天页会把认不出格式的行按上一句的说话人收下，批量不能跟着宽——每组都要扣一次导出额度，
+  // 一整段散文会变成一张「我」在念散文的废卡。
+  assert.throws(() => parseBatch('# 散文组\n今天天气不错，大家随意聊了两句。'), /没有有效对话/)
+  const settings = { platform: 'android', contactName: '原聊天', backgroundColor: '#abcdef' } as PhoneSettings
+  const [snapshot] = parseBatch('# 正常组\n我：开场白\n随手补的一句').map(card => chatSnapshot(card, settings, [], null))
+  assert.deepEqual(snapshot.messages.map(item => item.content), ['开场白', '随手补的一句'])
+  assert.equal(snapshot.messages[1].senderId, snapshot.messages[0].senderId)
+  // 快照里不夹带解析器内部的书（skipped / unlabeled）。
+  assert.deepEqual(Object.keys(snapshot).sort(), ['messages', 'selfId', 'settings', 'users'])
+})
+
 test('preserves message punctuation, URLs, times and ordinary inline labels', () => {
   const body = '我：短横线 -- 和 --- 留在正文，链接 https://example.com/a-b，时间 09:18。\n小林：好的，备注：明天继续。\n我：命令参数：--help'
   assert.equal(parseBatch(`# 标题：测试\n${body}`)[0].body, body)

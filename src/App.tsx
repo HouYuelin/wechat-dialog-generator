@@ -915,7 +915,12 @@ function App() {
     }
     const kept = carried > 0 ? `，已沿用 ${carried} 个头像` : '';
     const fromArchive = restored.applied > 0 ? `，其中 ${restored.applied} 个来自用过的头像` : '';
-    showToast(`成功导入 ${result.messages.length} 条消息（${result.users.length} 个用户）${kept}${fromArchive}`);
+    // 有行没能进对话就必须说出来。以前「只写了名字没写内容」的行是静默丢掉的，
+    // 回执照样显示「导入成功」，用户看到的就是「明明加了一条，怎么没有」。
+    const dropped = result.skipped.length
+      ? `；第 ${result.skipped.map(item => item.line).join('、')} 行只写了名字没写内容，已跳过`
+      : '';
+    showToast(`成功导入 ${result.messages.length} 条消息（${result.users.length} 个用户）${kept}${fromArchive}${dropped}`);
   }, [avatarPresets, importText, selfId, showToast, users]);
 
   const handleUpdateAvatar = useCallback((userId: number, avatar: string) => {

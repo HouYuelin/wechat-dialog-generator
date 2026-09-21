@@ -64,9 +64,47 @@ export function getDefaultAvatar(index: number): string {
   return `${base}${AVATAR_FILES[index % AVATAR_FILES.length]}`;
 }
 
-interface ParseResult {
+/** 一行没被识别成消息、因而没进对话时的记录。导入回执会把它报出来。 */
+export interface SkippedRecordLine {
+  /** 行号从 1 数，和用户在文本框里数出来的一致。 */
+  line: number;
+  /** 这一行的原文（已去掉列表符号与首尾空白）。 */
+  text: string;
+}
+
+export interface ParseResult {
   users: ChatUser[];
   messages: ChatMessage[];
+  /**
+   * 「写了名字和冒号、却没写内容」的行（例如 `**李四**：`）。
+   * 这是唯一一种真的留不下东西的半行：留不下内容，也不能像以前那样悄悄消失。
+   */
+  skipped: SkippedRecordLine[];
+  /**
+   * 没写「名字：」、按「接着上一句往下说」收进来的行数。
+   *
+   * 聊天页对这个宽进：用户在这个框里写的每一行都是他想看到的内容。
+   * 但批量导出要拦住「整组都没按格式写」的输入（否则一整段散文会被当成「我」说的话出一张废卡，
+   * 而每组都要扣一次额度），所以这个数字要暴露出去给 `validateChat` 用。
+   */
+  unlabeled: number;
+}
+
+/**
+ * 一行的预处理与「整行跳过」判定。
+ * 收名字那一趟和出消息那一趟必须得出完全一样的结果，所以抽成一处，别在两趟里各写一遍。
+ * 标题行（#）、引用行（>）、分隔线（---）是记录文本里的排版标记，不是消息；
+ * 时间行由两趟各自单独处理（第一趟只是跳过，第二趟要出一个时间节点）。
+ */
+function prepareRecordLine(rawLine: string): string | null {
+  const line = rawLine.trim();
+  if (!line) return null;
+  if (/^#+\s/.test(line) || /^>/.test(line) || /^[-=*]{3,}$/.test(line)) return null;
+  return line.replace(/^[-*]\s+/, '');
+}
+
+function isTimeLine(value: string) {
+  return TIME_REG.test(value) || TIME_REG2.test(value) || TIME_REG3.test(value) || TIME_REG4.test(value);
 }
 
 export function parseChatRecord(text: string): ParseResult {
@@ -75,38 +113,33 @@ export function parseChatRecord(text: string): ParseResult {
   const seenNames = new Set<string>();
   let hasExplicitSelf = false;
 
+  /** 记下一个说话人（第一趟用）。显式自称只留标记，不进名单。 */
+  const registerName = (name: string) => {
+    if (!name) return;
+    const nameLower = name.toLowerCase();
+    if (SELF_ALIASES.has(name) || SELF_ALIASES.has(nameLower)) {
+      hasExplicitSelf = true;
+    } else if (!seenNames.has(name)) {
+      seenNames.add(name);
+      orderedNames.push(name);
+    }
+  };
+
   // First pass: collect all unique sender names in order
   lines.forEach(rawLine => {
-    let line = rawLine.trim();
-    if (!line) return;
-    if (/^#+\s/.test(line) || /^>/.test(line) || /^[-=*]{3,}$/.test(line)) return;
-    line = line.replace(/^[-*]\s+/, '');
+    const line = prepareRecordLine(rawLine);
+    if (line === null) return;
     if (MD_TIME_REG.test(line)) return;
-    const stripped = line.replace(/\*\*/g, '').trim();
-    if (TIME_REG.test(stripped) || TIME_REG2.test(stripped) || TIME_REG3.test(stripped) || TIME_REG4.test(stripped)) return;
+    if (isTimeLine(line.replace(/\*\*/g, '').trim())) return;
 
     const mdMatch = line.match(MD_MSG_REG);
     if (mdMatch) {
-      const name = mdMatch[1].replace(/\s+/g, '').trim();
-      const nameLower = name.toLowerCase();
-      if (SELF_ALIASES.has(name) || SELF_ALIASES.has(nameLower)) {
-        hasExplicitSelf = true;
-      } else if (!seenNames.has(name)) {
-        seenNames.add(name);
-        orderedNames.push(name);
-      }
+      registerName(mdMatch[1].replace(/\s+/g, '').trim());
       return;
     }
     const colonIdx = line.search(/[：:]/);
     if (colonIdx > 0) {
-      const name = line.slice(0, colonIdx).trim().replace(/\*\*/g, '');
-      const nameLower = name.toLowerCase();
-      if (SELF_ALIASES.has(name) || SELF_ALIASES.has(nameLower)) {
-        hasExplicitSelf = true;
-      } else if (!seenNames.has(name)) {
-        seenNames.add(name);
-        orderedNames.push(name);
-      }
+      registerName(line.slice(0, colonIdx).trim().replace(/\*\*/g, ''));
     }
   });
 
@@ -138,15 +171,49 @@ export function parseChatRecord(text: string): ParseResult {
 
   // Second pass: parse messages
   const messages: ChatMessage[] = [];
+  const skipped: SkippedRecordLine[] = [];
+  let unlabeled = 0;
   let msgId = 1;
 
-  lines.forEach(rawLine => {
-    let line = rawLine.trim();
-    if (!line) return;
-    if (/^#+\s/.test(line)) return;
-    if (/^>/.test(line)) return;
-    if (/^[-=*]{3,}$/.test(line)) return;
-    line = line.replace(/^[-*]\s+/, '');
+  /** 名字映射到用户 id：认识的用老的，新名字就地建一位（与解析器一贯的规则一致）。 */
+  const senderIdFor = (rawName: string): number => {
+    const nameLower = rawName.toLowerCase();
+    if (SELF_ALIASES.has(rawName) || SELF_ALIASES.has(nameLower) || nameLower === selfUser?.name.toLowerCase()) {
+      return selfUser?.id ?? 1;
+    }
+    const known = nameMap[nameLower];
+    if (known !== undefined) return known;
+    const newUser: ChatUser = { id: nextId++, name: rawName, avatar: null };
+    users.push(newUser);
+    nameMap[nameLower] = newUser.id;
+    return newUser.id;
+  };
+
+  /** 特殊消息（图片 / 红包 / 转账 / 语音）走各自的类型，其余都是文字。 */
+  const pushMessage = (senderId: number, content: string) => {
+    const special = parseSpecialContent(content);
+    if (special) {
+      messages.push({ id: msgId++, type: special.type, senderId, content: special.content, params: special.params });
+    } else {
+      messages.push({ id: msgId++, type: 'text', senderId, content, params: {} });
+    }
+  };
+
+  /**
+   * 没写「名字：」的那一行该算谁说的：接着上一句的说话人往下说。
+   * 时间节点没有真正的说话人（解析器一律记成自己），所以要往回找到最近的一条真实消息。
+   * 整段还没人说过话时退回「自己」。
+   */
+  const fallbackSpeakerId = (): number => {
+    for (let i = messages.length - 1; i >= 0; i--) {
+      if (messages[i].type !== 'time') return messages[i].senderId;
+    }
+    return selfUser?.id ?? 1;
+  };
+
+  lines.forEach((rawLine, index) => {
+    const line = prepareRecordLine(rawLine);
+    if (line === null) return;
 
     // Markdown time: **【xxx】**
     const mdTimeMatch = line.match(MD_TIME_REG);
@@ -157,7 +224,7 @@ export function parseChatRecord(text: string): ParseResult {
 
     // Plain time
     const stripped = line.replace(/\*\*/g, '').trim();
-    if (TIME_REG.test(stripped) || TIME_REG2.test(stripped) || TIME_REG3.test(stripped) || TIME_REG4.test(stripped)) {
+    if (isTimeLine(stripped)) {
       messages.push({ id: msgId++, type: 'time', senderId: selfUser?.id ?? 1, content: stripped, params: {} });
       return;
     }
@@ -166,27 +233,11 @@ export function parseChatRecord(text: string): ParseResult {
     const mdMsgMatch = line.match(MD_MSG_REG);
     if (mdMsgMatch) {
       const rawName = mdMsgMatch[1].replace(/\s+/g, '').trim();
-      let content = mdMsgMatch[2].trim();
-      content = content.replace(/@\S+/g, '').trim();
-      if (!content) return;
-      const nameLower = rawName.toLowerCase();
-      let senderId: number;
-      if (SELF_ALIASES.has(rawName) || SELF_ALIASES.has(nameLower) || nameLower === selfUser?.name.toLowerCase()) {
-        senderId = selfUser?.id ?? 1;
-      } else if (nameMap[nameLower] !== undefined) {
-        senderId = nameMap[nameLower];
-      } else {
-        const newUser: ChatUser = { id: nextId++, name: rawName, avatar: null };
-        users.push(newUser);
-        nameMap[nameLower] = newUser.id;
-        senderId = newUser.id;
-      }
-      const special = parseSpecialContent(content);
-      if (special) {
-        messages.push({ id: msgId++, type: special.type, senderId, content: special.content, params: special.params });
-      } else {
-        messages.push({ id: msgId++, type: 'text', senderId, content, params: {} });
-      }
+      const rawContent = mdMsgMatch[2].trim();
+      // 只 @ 了某个人、别的一个字都没有时不要把整条抹掉：记录文本里的 @ 是顺带的称呼，
+      // 不该成为「明明写了一条，导入后却什么都没有」的理由。
+      const content = rawContent.replace(/@\S+/g, '').trim() || rawContent;
+      pushMessage(senderIdFor(rawName), content);
       return;
     }
 
@@ -195,29 +246,31 @@ export function parseChatRecord(text: string): ParseResult {
     if (colonIdx > 0) {
       const rawName = line.slice(0, colonIdx).trim().replace(/\*\*/g, '');
       const content = line.slice(colonIdx + 1).trim();
-      if (!content) return;
-      const nameLower = rawName.toLowerCase();
-      let senderId: number;
-      if (SELF_ALIASES.has(rawName) || SELF_ALIASES.has(nameLower) || nameLower === selfUser?.name.toLowerCase()) {
-        senderId = selfUser?.id ?? 1;
-      } else if (nameMap[nameLower] !== undefined) {
-        senderId = nameMap[nameLower];
-      } else {
-        const newUser: ChatUser = { id: nextId++, name: rawName, avatar: null };
-        users.push(newUser);
-        nameMap[nameLower] = newUser.id;
-        senderId = newUser.id;
+      // 「写了名字和冒号、却没写内容」是唯一一种真的留不下东西的半行。以前它被静默丢掉，
+      // 回执却照样说「导入成功」，所以这里单独记一笔，让回执能说清是哪一行。
+      if (!content) {
+        skipped.push({ line: index + 1, text: line });
+        return;
       }
-      const special2 = parseSpecialContent(content);
-      if (special2) {
-        messages.push({ id: msgId++, type: special2.type, senderId, content: special2.content, params: special2.params });
-      } else {
-        messages.push({ id: msgId++, type: 'text', senderId, content, params: {} });
-      }
+      pushMessage(senderIdFor(rawName), content);
+      return;
     }
+
+    // 剩下的行：没写「名字：」的正文。认不出格式 **不等于** 这一行不该存在——
+    // 「在末尾手动加了一条、提示导入成功、可它就是不出现」就是这么来的：
+    // 只要这一行里没有冒号，以前整行直接消失。现在按上一句的说话人收进对话里。
+    unlabeled += 1;
+    messages.push({ id: msgId++, type: 'text', senderId: fallbackSpeakerId(), content: line, params: {} });
   });
 
-  return { users, messages };
+  // 整段文本里一个名字都没出现（比如只写了一行不带「名字：」的正文）时 users 是空的，
+  // 而消息总得有个说话人：按「第一个出现的用户是自己」的同一套规则补一个「我」，
+  // 免得消息指向一个不存在的用户，预览里找不到人。
+  if (messages.length > 0 && users.length === 0) {
+    users.push({ id: 1, name: '我', avatar: null });
+  }
+
+  return { users, messages, skipped, unlabeled };
 }
 
 /** 解析按行切，文本消息里带换行会被拆成两条，所以写回时压成一行。 */

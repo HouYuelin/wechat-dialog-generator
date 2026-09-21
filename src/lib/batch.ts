@@ -65,14 +65,19 @@ export function validateChat(card: ChatContent, index = 1) {
   if (Array.from(card.title).length > 40) throw new Error(`第 ${index} 张标题请控制在 40 字以内。`)
   if (card.body.length > 10000) throw new Error(`第 ${index} 组对话请控制在 10000 字以内。`)
   const parsed = parseChatRecord(card.body)
-  if (!parsed.users.length || !parsed.messages.some(m => m.type !== 'time')) throw new Error(`第 ${index} 组没有有效对话，请按“姓名：消息内容”填写。`)
+  // 聊天页对「没写『名字：』的行」是宽进的（按上一句的说话人收进对话），批量这边不能跟着宽：
+  // 整组都没按格式写的话，出来的是一张「我」在念散文的废卡，而每组都要扣一次导出额度。
+  // 所以这里要求至少有一条真正标了说话人的消息，其余判据照旧。
+  const labeled = parsed.messages.filter(m => m.type !== 'time').length - parsed.unlabeled
+  if (!parsed.users.length || labeled <= 0) throw new Error(`第 ${index} 组没有有效对话，请按“姓名：消息内容”填写。`)
   if (parsed.messages.length > 150) throw new Error(`第 ${index} 组超过 150 条消息，请拆分后导入。`)
 }
 export function chatSnapshot(content: ChatContent, settings: PhoneSettings, avatars: ChatUser[], originalSelf: number | null): ChatSnapshot {
   validateChat(content)
   const parsed = parseChatRecord(content.body)
   const users = carryOverAvatars(parsed.users, avatars, originalSelf)
-  return { ...parsed, users, selfId: carryOverSelfId(users, avatars, originalSelf), settings: { ...settings, contactName: content.title } }
+  // 只取快照要用的四个字段：skipped / unlabeled 是给导入回执与校验看的，不该混进快照里。
+  return { users, messages: parsed.messages, selfId: carryOverSelfId(users, avatars, originalSelf), settings: { ...settings, contactName: content.title } }
 }
 export function cardFilename(index: number, title: string) {
   // Filesystem names must exclude control characters as well as path separators.

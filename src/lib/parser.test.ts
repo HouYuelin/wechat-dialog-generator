@@ -97,3 +97,71 @@ test('写回文本再解析，还是同一批消息', () => {
   assert.deepEqual(second.messages, first.messages);
   assert.deepEqual(second.users.map(user => user.name), first.users.map(user => user.name));
 });
+
+test('末尾补一行没写「名字：」的正文不会消失，按上一句的说话人收下', () => {
+  const result = parseChatRecord('**张三**：你好\n**李四**：不忙，怎么了？\n谢谢老板');
+
+  assert.deepEqual(result.messages.map(item => [item.type, item.content]), [
+    ['text', '你好'],
+    ['text', '不忙，怎么了？'],
+    ['text', '谢谢老板'],
+  ]);
+  // 接在「李四」后面，所以这句也算李四说的。
+  assert.equal(result.messages[2].senderId, result.messages[1].senderId);
+  assert.equal(result.unlabeled, 1);
+  assert.deepEqual(result.skipped, []);
+});
+
+test('一行里没有冒号也不会丢：加粗名字、只有空格分隔这些写法都保留下来', () => {
+  const result = parseChatRecord('**张三**：你好\n**李四** 好的\n【王五】收到');
+
+  assert.deepEqual(result.messages.map(item => item.content), ['你好', '**李四** 好的', '【王五】收到']);
+  assert.equal(result.unlabeled, 2);
+});
+
+test('只 @ 了某个人也要留下这一条，不因为过滤 @ 就整条没了', () => {
+  const result = parseChatRecord('**李四**：@张三');
+
+  assert.deepEqual(result.messages.map(item => [item.type, item.content]), [['text', '@张三']]);
+  assert.equal(result.unlabeled, 0);
+  // @ 后面还有正文时，@ 这个称呼仍然按老规矩去掉。
+  assert.equal(parseChatRecord('**李四**：@张三 你看下').messages[0].content, '你看下');
+});
+
+test('只写了名字没写内容的半行记进 skipped，并带上行号（行号从 1 数）', () => {
+  const result = parseChatRecord('**张三**：你好\n\n**李四**：\n**张三**：在的');
+
+  assert.deepEqual(result.skipped, [{ line: 3, text: '**李四**：' }]);
+  assert.deepEqual(result.messages.map(item => item.content), ['你好', '在的']);
+});
+
+test('整段只有一行正文时补出一个说话人，消息不会指向不存在的用户', () => {
+  const result = parseChatRecord('大家好，我先说一句');
+
+  assert.deepEqual(result.users.map(user => user.name), ['我']);
+  assert.equal(result.messages.length, 1);
+  assert.equal(result.messages[0].senderId, result.users[0].id);
+});
+
+test('时间节点不算说话人：兜底的那行接在它前面最近的一条真实消息上', () => {
+  const result = parseChatRecord('**张三**：你好\n**【3月1日 14:32】**\n接着聊');
+
+  assert.equal(result.messages[1].type, 'time');
+  assert.equal(result.messages[2].senderId, result.messages[0].senderId);
+});
+
+test('认不出格式的行不影响本来就认得出的那些：文字、图片、时间各归各位', () => {
+  const result = parseChatRecord('**【3月1日 14:32】**\n**张三**：你好\n随手写的一句\n**李四**：[图片]\n再说一句');
+
+  assert.deepEqual(result.messages.map(item => [item.type, item.content]), [
+    ['time', '3月1日 14:32'],
+    ['text', '你好'],
+    ['text', '随手写的一句'],
+    ['image', '/placeholder-image.png'],
+    ['text', '再说一句'],
+  ]);
+  assert.equal(result.unlabeled, 2);
+  // 兜底那两行分别接在张三与李四后面。
+  assert.equal(result.messages[2].senderId, result.messages[1].senderId);
+  assert.equal(result.messages[4].senderId, result.messages[3].senderId);
+});

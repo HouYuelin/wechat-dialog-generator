@@ -77,7 +77,7 @@ export function ImportPanel({ text, onTextChange, onImport }: ImportPanelProps) 
           语音消息：<code>**用户名**：[语音]秒数</code>，转文字：<code>**用户名**：[语音]秒数:内容</code><br />
           时间节点：<code>**【3月1日 14:32】**</code><br />
           表情：正文里写 <code>[呲牙]</code> 就会显示成对应表情（也可用输入框下方的表情面板插入）
-          <div className="tip-muted">标题行(#)、引用行(&gt;)、空行自动跳过。第一个出现的用户默认为"自己"。图片不带URL时可在预览中点击上传本地图片。</div>
+          <div className="tip-muted">标题行(#)、引用行(&gt;)、空行自动跳过。第一个出现的用户默认为"自己"。没写「姓名：」的行不会丢，会当成上一句说话人的续话收进对话；只有「姓名：」后面空着的行会被跳过（导入后会告诉你第几行）。图片不带URL时可在预览中点击上传本地图片。</div>
           </div>
         </Disclosure>
 
