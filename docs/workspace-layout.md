@@ -453,5 +453,404 @@
 - 单测从 204 增至 211：新增 `workspace-prefs.test.ts` 7 条（默认值单一来源与不可被污染、
   标题不进偏好、脏数据逐字段兜底、缺字段互不影响、键序无关的比较、偏好与设置互转）。
 
+## 2026-09-21 批量聊天图对齐聊天生成器
+
+需求：「批量聊天图中，也加一下这两天在聊天生成器里添加的那些功能。」
+
+### 先查缺口，再动手
+
+批量页与聊天页**用的是同一批组件**，缺的不是功能而是**接线**：`BatchStudio.tsx` 调用
+`UserAvatarManager` / `PhonePreview` / `SettingsPanel` / `WorkspacePanels` 时只传了必填 props，
+而这些组件的新入口全部是**可选 prop**——不传就等于关闭。逐项对完之后，真正要写的只有三类：
+
+1. 素材库（整块没接）：头像与图片的选取、上传入库、用过的头像归档、聊天背景管理、弹窗本体。
+2. 尺寸入口：`WorkspacePanels` 的「屏幕尺寸 / 图片大小 / 字体大小」三段。
+3. 昵称记忆：批量页自己的「聊天名称」输入框、以及导入时记角色名。
+
+已经自动跟着走的**不用动**：解析规则（转账备注含冒号、时间消息）与头像按名字复用——
+批量页走的是同一套 `parseChatRecord` / `carryOverAvatars`。
+
+### 素材库：目标留在批量页，数据与写库动作留在 App
+
+`App.tsx` 里那份 `libraryPicker` 的目标是**聊天页的 state**（`setUsers` / `setSettings` /
+`setDraftImage`），搬到批量页会很别扭：批量的目标是「第几组的第几条消息 / 哪一位角色 / 哪一组的背景」。
+所以拆成两层：
+
+- **App 提供数据与跨页共用的写库动作**：`mediaAssets` / `libraryReady` / `onImportMedia` /
+  `onMarkAssetUsed` / `onRemoveAsset` / `onRenameAsset`——两边共用同一份库，谁传的图对方都看得见。
+- **`BatchStudio` 自己管 `picker` 与 `MediaLibraryDialog`**：`type LibraryTarget = { kind, jobId, msgId?, userId?, background? }`，
+  按目标决定用到哪里。`onKindChange` **保留 jobId 与目标**（表情 ↔ 商品图来回切着挑同一张图时目标不能丢，
+  与聊天页弹窗同一条规则）。
+
+顺手做的一致性收口：
+
+- `MediaImportOutcome` 从 `App.tsx` 挪到 `src/lib/media-library.ts`（原来是 App 内的局部 interface），
+  两个工作区共用同一个返回类型。
+- `UserAvatarManager` 的「用过的头像」**还给同名角色**这件事，批量页自己做不了：
+  它需要 `touchAvatarPreset` + 落盘。所以 App 只暴露 `onTouchPreset(preset)`（记一次使用），
+  **换到哪一组由批量页自己决定**（`applyPresetToJob` 按 `avatarNameKey` 在本组找同名角色，找不到就只提示）。
+- 归档的「记档」逻辑抽成 App 的 `rememberUsersForPresets(list)`，聊天页的 effect 与批量页共用——
+  在批量页换的头像同样会进「用过的头像」。留意：**函数名不能以 `use` 开头**，
+  `eslint` 的 `react-hooks/rules-of-hooks` 会把它当 Hook 报错（`usePresetForJob` 已改名 `applyPresetToJob`）。
+
+### 尺寸：屏幕尺寸是工作区级，图片大小与字号按组
+
+三个尺寸里只有 `screenSize` 不在 `PhoneSettings` 里（它在偏好 `playback` 组），语义上是工作区级的：
+
+- **屏幕尺寸**：App 把 `screenSize` / `setScreenSize` 直接传下去，批量页与聊天页是**同一个值**，
+  导出图片时 `renderBatchChat(job, screen)` 一路带到 `captureChatPhone`。
+  **这是这次唯一改变批量既有行为的地方**：此前批量恒定 1125×2436（`scripts/batch-*-smoke.mjs`
+  有按这个尺寸写的断言，改分辨率后那些断言不再代表默认行为）。
+- **图片大小 / 字体大小**：写进**该组**的 `snapshot.settings`（`patchJobSettings`）。
+  新建的组仍按 `currentChat.settings`（= 偏好）初始化，所以批量页的改动**不会回流到偏好**，
+  也不会影响其他组——这是「按组生效」的直接后果，若日后想让它同时被记住，
+  在 `patchJobSettings` 里补一次偏好写入即可。
+- 弹层里的档位是**非受控本地 state、按打开时传入的值初始化**（见前文那条规则），
+  所以换组之后要重新打开弹层才是新值；弹层关闭即卸载，重新打开天然是干净的。
+
+### 昵称记忆
+
+- 「聊天名称」输入框接 `NameSuggest`，`onBlur` 记一条（与 `SettingsPanel` 的聊天标题同一套）。
+- `addChats` 解析完把角色名一并 `rememberNameHistory(...)`，**排除「我」**（`isSelfAlias`），
+  与 App 的 `handleImport` 完全一致——批量导入完再回聊天页，不用重打名字。
+- 手机样式里的「聊天标题」本来就走共用的 `SettingsPanel`，这一项**批量页早就有**。
+
+### 行为变化
+
+- 批量页的「导入聊天」页脚文案改为说明会沿用「我的偏好」的样式与导出分辨率。
+- 批量页弹窗（素材库）的标题与按钮文案按目标细分，与聊天页同一套措辞。
+- 聊天页侧行为不变：`handleUsePreset` 抽出了 `touchPreset`，逻辑等价。
+
+## 2026-09-21 微信表情（存标签，显示表情）
+
+### 核心约定：文本里存标签，渲染时才变成表情
+
+`[呲牙]` 在文本里就是这几个字符，渲染时换成 😁。这一个决定把后面几件事都解决了：
+
+- 导入的记录里带标签**不用先转换**就显示成表情（这就是「自动识别」）；
+- 记录文本、项目文件、分享链接里存的都是几个字节，不会因为表情膨胀——图片消息在记录里
+  只写 `[图片]` 而不写 data URL，是同一条理由（一张压缩图几十万字符，塞进输入框会直接卡住）；
+- 「写回文本 → 再解析」原样往返，导入导出之间不改用户写的字（`parser.test.ts` 的回环用例覆盖）。
+
+要改的是「表情长什么样」，只动 `src/lib/wechat-emoji.ts` 那张表，别在渲染层另建一套。
+
+### 字形用系统自带的通用 emoji，不打包微信的表情图
+
+微信那套表情图是它的美术素材，不能进仓库——和提示音刻意不引入第三方音频文件是同一条底线。
+所以这里做的是**按语义对齐**的翻译（`[呲牙]` → 😁），标签名沿用微信的叫法方便照着写。
+副作用：同一个 emoji 会挂在两三个标签下（`[得意]` / `[坏笑]` 都是 😏），
+个别标签只能取最接近的一个（`[差劲]` 的勾手指、`[太极]` 的姿势），这是刻意的，不是漏配。
+表里 136 条按「表情 / 手势 / 物件 / 新表情」四组，顺序沿用微信面板，改表时保持这个顺序。
+
+### 解析：只认已知标签，认不出来的原样留着
+
+`splitEmoji()` 用 `\[([^[\]]{1,8})\]` 找方括号对，再拿里面的名字查表——**查不到就整段留在文字里**。
+所以 `[待办]`、`[链接](url)`、`[这是一个很长的说明]`、`[]`、`[ 微笑]`（带空格）都不会被吃掉。
+`[图片]` / `[红包]` / `[转账]` / `[语音]` 是记录格式的特殊消息前缀，**刻意不收进表情表**，
+免得两套语义打架；测试里有一条专门盯着这个。
+
+### 渲染：EmojiText 走 React 元素，不再拼 innerHTML
+
+新增 `components/EmojiText.tsx`，把 `splitEmoji` 的结果渲染成 `<span class="wc-emoji">`，
+换行照旧渲染成 `<br>`（气泡的 `white-space` 是 normal，不换行会折成空格）。
+
+原来的写法是 `dangerouslySetInnerHTML={{ __html: escHtml(...) }}`——每个调用点都得自己记得转义，
+漏一处就是一个 XSS 口子。改成 React 元素之后标签里的尖括号天然是纯文本，调用点只传字符串。
+
+`.wc-emoji` 的样式在 `PhonePreview.css`：`font-size: 1.2em` + `line-height: 1` + 负 `vertical-align`。
+1.2em 的行盒仍小于气泡的 1.4 行高，所以一条消息里混表情**不会把气泡撑高**；字号用 em，
+「字体大小」档位一动它也跟着缩。
+
+### 面板：EmojiPicker
+
+按钮 + 展开的分组网格，顶部「最近用过」。点一个表情做两件事：
+
+1. `rememberRecentEmoji(name)`（localStorage 的 `wechat-dialog-generator:emoji-recent`，
+   沿用 `name-history-store.ts` 那套同步快照写法，几个面板共用一份）；
+2. 把**标签**插到目标输入框的光标处——插入的是 `[呲牙]` 不是 😁，这样手写标签和从面板点
+   最后得到的文本完全一样。
+
+光标计算抽成纯函数 `lib/text-caret.ts` 的 `insertAtCaret()`（只读 `value` / `selection`，
+不碰 DOM，所以能在单测里喂普通对象）；插入后等一帧再把光标放回插入内容之后，
+连着点几个表情不用手动挪光标。
+
+`target` 是一个 ref，不是值：批量页的「逐条消息」是一列输入框共用一个面板，
+在 `onFocus` 里把 `ref.current` 指向当前那一个、同时记住是哪条消息，插入时才找得到人。
+
+### 刻意不认标签的地方
+
+- **红包备注**：微信的红包留言本身就不支持表情，保持写什么显示什么（`escHtml` 那一路）；
+- **语音转写**：微信语音转文字的产物里不会带表情，保持原样。
+
+转账备注则认标签（微信里转账备注可以带表情），所以它和红包备注在 `PhonePreview` 里走的是两条路。
+
+### 接入点
+
+`MessageEditor`（文字、转账备注）、`ImportPanel`（聊天记录文本）、
+`BatchStudio`（批量文本框、本组聊天记录、逐条消息编辑）、
+`MomentsEditor`（朋友圈正文，正文与评论的渲染也都过了 `EmojiText`）。
+
+### 单测
+
+新增 `wechat-emoji.test.ts`（10 条）与 `text-caret.test.ts`（5 条），另外
+`batch-prompt.test.ts` 的示例消息数与 `parser.test.ts` 的回环用例都仍然通过。
+
+## 2026-09-21 批量页的视频导出
+
+批量页此前只能导出图片（每组一张 PNG，最后打成一个 ZIP）。这一节记的是把聊天页那套
+视频链路复用到批量页：**每组一段视频，逐条录、录完立即下载**。
+
+### 复用而不是重写：批量页只做「调度」
+
+录制本身一行都没重写。`BatchStudio` 的 `video` prop 由 App 注入，直接复用聊天页同一套：
+
+- 排期与耗时：`chat-playback.ts`（时间线）、`chat-scroll-video.ts`（滚动计划）；
+- 渲染与录制：`chat-video-render.tsx` / `chat-video-recorder.ts`
+  （`renderChatFrames` / `renderChatScrollFrame` / `recordChatVideo` / `recordScrollingChatVideo`）；
+- 画面尺寸：`chat-video.ts`；提示音：`notify-sound.ts`；
+- 设置面板：`VideoExportDialog`（见下）。
+
+批量页自己新增的只有两处：纯计算 `src/lib/batch-video.ts`，和浏览器侧粘合
+`src/components/batch-video-render.ts`。前者把「一组 + 设置」算成可断言的
+`BatchVideoTask`（`mode` / `timeline` / `notifyAt` / `totalMs` / `estimateMs`），
+后者按 `mode` 分发到 flip（逐条播放）或 scroll（长截图滚动）两条渲染路径。
+**要改录制节奏、首尾停顿、提示音时机，仍然只改 `chat-playback.ts`，批量与聊天、预览与导出会一起变。**
+
+### 为什么是逐条下载，不是打成一个 ZIP
+
+图片那套是「渲染 → 存进 `job.bytes` → 全部跑完 → 打成 ZIP 一次下载」。视频体积是图片的
+百倍量级，一批几十组全留在内存里再打包必然 OOM（本机 340MB 可用内存下连 `vite build`
+都会崩）。所以视频模式**不往内存里囤**：每组录完立刻触发一次浏览器下载，随即释放 blob 引用；
+视频模式也没有「重新下载 ZIP」这一步。
+
+### 调度骨架 `runBatch` 泛化出 `deliver` 阶段
+
+`src/lib/batch.ts` 的 `runBatch` 从「图片专用」改成两段式：
+
+```
+render（离屏渲染）→ 取消检查 → job.locked=true → debit（扣额度）→
+  ├─ 图片：把 bytes 存进 job，最后统一打 ZIP
+  └─ 视频：调 deliver(job, payload) —— 录制 + 立即下载，不存 bytes
+```
+
+关键约束没变：**额度在渲染完成之后才扣**，渲染阶段取消不扣次；重试复用原 `action_id`
+（`consumeAccountExport` 幂等），不会重复扣。视频的产物记在 `job.video`（`{name, bytes}`），
+队列行显示「视频 · N MB」。
+
+### 产出模式记进「我的偏好」
+
+`BatchOutput = 'image' | 'video'` 写进偏好的 `playback.batchOutput`（默认 `image`），
+刷新或重新导入后仍是上次选的那项。切换模式时会把「产物类型对不上」的已完成组标记为待重做
+（视频与图片的字节不能互相复用）。`workspace-prefs.ts` 的归一化与 `canonical()` 比较串
+都补了这个字段，老偏好缺字段时按默认值兜底（`workspace-prefs.test.ts` 覆盖）。
+
+### 共用设置面板与进度浮层
+
+`VideoExportDialog` 新增 `groupCount?: number` 与 `description?: ReactNode`：给了
+`groupCount` 就切到批量措辞——标题「批量视频设置」、计数以「组」为单位、主按钮「完成」、
+摘要写「每组视频使用 1 次导出额度，本批共 N 次」。`VideoProgressOverlay` 新增
+`jobLabel?: string`，在录制文案里补一句「这一条录完会立即下载」。聊天页不传这两个 prop，
+行为完全不变。
+
+### 额度与埋点
+
+额度仍按组扣（`debitBatchExport`，每组 1 次），与图片模式一致。App 的 `onComplete`
+签名从 `(id)` 扩成 `(id, output: BatchOutput)`，据此发对应埋点：
+视频发 `video_exported`，图片发 `image_exported`；导出日志用 `beginExportLog({ mode })` 记类型。
+
+### 验证边界
+
+纯逻辑有单测兜底（`batch-video.test.ts`：尺寸解析、滚动时长映射、flip 时间线与提示音、
+收发开关、滚动无时间线、整批耗时求和、两侧留白夹取）。但**本机没有任何浏览器**，涉及 MediaRecorder、
+Web Audio 与真实下载的录制过程无法在这里端到端跑，需在 Chrome / Edge 里手工确认。
+
+## 2026-09-21 导出两侧留白（安全区）
+
+> 这份留白**图片与视频共用**。图片（生成图片 / 长截图 / 复制 / 批量聊天图）在 `capture-chat.ts`
+> 里直接把底色补在导出图左右；视频的画布尺寸固定，走 `fitRect` + `videoContentScreen()` 那一套。
+> 两边的像素口径是同一个（输出像素），所以「左右各留 120px」在两种产出里指的是同一件事。
+
+### 问题：9:16 发抖音，两边被裁 + 被浮层压住
+
+9:16 的视频在 iPhone Pro Max 这类 **19.5:9** 的屏幕上会被「铺满」播放——平台先把视频等比
+放大到填满屏幕，再裁掉溢出的部分。算一下：1080×1920 放进 1290×2796，放大倍率取高那一侧
+（2796 / 1920 = 1.456 → 1573×2796），两侧各裁掉 (1573 − 1290) / 2 = 141.5 屏幕像素，
+换回视频坐标就是**每侧 97px**。再加上右侧那排按钮、左下角昵称与简介这些浮层，贴着边缘的
+内容就看不到了。
+
+### 取舍：在导出这一层解决，不碰手机渲染
+
+两条路可选：把手机内容本身左右内缩（背景露出来），或者把画面往画布里摆、两侧补底色。
+选了后者，因为：
+
+- 留白是「画布上的空白带」，语义直白，用户调大调小立刻能算出画面占多少；
+- 手机内容内缩要连顶栏底栏一起改（否则上下栏满宽、中间内缩很怪），而且约束会渗进
+  `PhonePreview.css` 与 `captureChatPhone` 这些共用代码里，图片、长截图、预览都得跟着动。
+
+后者又分成两种做法，**图片与视频各用各的**：
+
+- **图片**没有画布，一张截图就是手机本身 → 输出宽度各加 N，高度与画面比例一个像素不动
+  （`paddedImageSize()` + `capture-chat.ts` 的补边）。长截图同一条路，只是高度本来就是内容决定的。
+- **视频**的画布是固定的（1080×1920 这种）→ 见下一节。
+
+但视频这条路上，**「等比缩小」会连高度一起缩**——这是第一版踩的坑：宽度从 887 收到 840，高度也跟着从 1920 掉到
+1819，上下各空出 50px；画布若与手机同比例（「1125×2436 满屏」），上下各空 260px，比两侧还宽，
+看上去就成了「四周留白」。所以真正落地的规则是：
+
+- 留白**不超过**画布自然留边（9:16 约 97px）：手机保持原比例铺满上下，自然留边本身就是留白（「至少 N」）；
+- 留白**超过**它：把手机的画面比例换成「画布去掉两侧留白」那一份，手机仍然铺满上下、两侧正好让出 N 像素。
+
+「只左右留白、上下不空」只有这样才成立。等比缩放做不到，是几何决定的：平台按高度铺满后，可见
+宽度恒为 `画布高 × 屏宽 / 屏高`（1080×1920 就是 886px），而手机按高度铺满时的宽度是
+`画布高 × 1125 / 2436 = 887px` —— 两者几乎相等，所以「上下铺满」与「左右有边」不可能同时由等比
+缩放得到，必须换掉手机自己的画面比例。
+
+### 实现：`fitRect` 的第五个参数
+
+`chat-video.ts` 的 `fitRect(sourceW, sourceH, targetW, targetH, sidePadding = 0)`：可用宽度
+先收窄 `2 × sidePadding`，再按等比缩放居中，x 从留白之后起算。`sidePadding` 传 0 或省略时
+结果与改动前**完全一致**（`chat-video.test.ts` 有一条专门断言这点），所以老的调用点不用动。
+
+两条录制路径都接了这个参数（`recordChatVideo` / `recordScrollingChatVideo`），批量走的是同一份
+（`BatchVideoRecordOptions.sidePadding` → `BatchVideoPlan.sidePad`，落到录制前再 clamp 一次）。
+
+**语义是「至少 N 像素」，不是「正好 N 像素」**：因为公式是「先收窄再等比缩放」，当留白比画布
+本来就会产生的留边还小时（9:16 下自然留边约 97px），起作用的是后者。所以「少量 60」在 9:16 上
+等于没效果，这条写进了单测与界面文案。留白上限 300，且内部再夹一层 `(targetW − 1) / 2`，
+避免极端值把画面压成 0 尺寸。
+
+### 只左右留白：`videoContentScreen()`
+
+`video-padding.ts` 里的 `videoContentScreen(screen, canvas, sidePad)` 返回**视频渲染该用的
+「屏幕尺寸」**：留白没越过自然留边时原样返回 `screen`（于是 0 与不带这个参数完全一致）；越过了就
+返回「宽度不变、高度按比例拉长」的那一份，比例 = `(画布宽 − 2×留白) / 画布高`，高度 `Math.ceil`
+（取整偏大，让**高度**成为那个卡住的约束：上下一定铺满，两侧只会多不会少，最多 1px）。
+`videoNaturalSideGap()` 是判定的那条线，也是「至少 N」里的 N。
+
+为什么返回值是 `ScreenSize`：下游全都认这个形状，于是**一行都不用改**——
+
+- `PhonePreview` 由它算 `--wc-phone-design-height`（坐标系高度就是画面比例），手机按新比例布局；
+- `captureChatPhone` 由它算坐标系高度与导出像素，采样密度 `宽度 / 1125` 不变，栅格化不会变糊；
+- `renderChatFrames` / `renderChatScrollFrame` 的 `snapshot.screen`，帧尺寸与手机比例天然自洽；
+- `videoFrameLayout` 由它算取景框，预览与成片同源。
+
+接线三处（都只改传参，逻辑一行没动）：App 的 `videoScreen`（预览）与 `renderScreen`（导出）、
+`BatchStudio` 的 `videoScreen`（预览 + 传给 `prepareBatchVideo` 的 snapshot）。
+
+**图片导出不走它**：截图、长截图、批量聊天图仍然用 `screenSize` 渲染。而 `captureChatPhone`
+本来就会在截图期间把 `--wc-phone-design-height` 强制写成自己那份 `designHeightFor(screen)`
+（`capture-chat.ts`，截完再还原），所以即使预览里的手机被换过比例，导出的 PNG 依旧是手机原本的
+比例——这条约束由那次强制写回兜住，不需要额外挡。图片的留白是**另一条路**：
+
+### 图片：留白直接加在导出图的左右
+
+`captureChatPhone(phone, longshot, screen, options)` 新增第四个参数
+（`{ sidePad, background }`，见 `capture-chat.ts`）：
+
+- 截完图之后，如果 `sidePad > 0`，`withSidePadding()` 新建一张
+  `(宽 + 2×N) × 原高` 的画布，先用 `background`（对话底色，调用方传 `settings.backgroundColor`）
+  铺满，再把原图 `drawImage` 到 x = N 的位置，然后立刻把原画布尺寸清零释放掉
+  （长截图动辄 16000px 高，早释放一次省几十 MB）。
+- 宽度由 `paddedImageSize()` 算（纯函数，含夹取与非法尺寸兜底：算不出正数就原样返回，不建 0 宽的画布）。
+- **手机的比例一个像素都不动**，只是外面多了两条底色带——这正是「图片没有画布」的意思。
+  1125×2436 的截图、左右各留 120 → 输出 1365×2436。
+
+接线两处、两条链路的图片路径：
+
+- App 的 `capturePhone()`（生成图片 / 长截图 / 复制共用）传 `{ sidePad: videoSidePad, background }`；
+- 批量的 `renderBatchChat(job, screen, sidePad)`，底色取**各组自己的** `snapshot.settings.backgroundColor`
+  （批量里每组背景可能不同，所以底色不能像视频那样整批共用一个）。
+
+**视频帧两条路径（`chat-video-render.tsx`）传 0**：视频的留白是在合成到画布时加的，帧本身要
+保持手机原始比例，否则会二次缩窄。
+
+### 档位与默认值：`src/lib/video-padding.ts`
+
+沿用 `image-size.ts` / `font-size.ts` 那套形状（预设 + `clamp` / `normalize` / `resolve` /
+`idFor` / `label` / `note`）。
+
+- 档位：关闭 0 / 少量 60 / **标准 120（默认）** / 多留 200，另有自由输入 0–300。
+- **默认 120** 是抖音安全区的推荐值：97px 的裁切量之上再留一点给右侧按钮栏。也就是说这次
+  改动会**改变既有用户的导出画面**（原先等于 0），所以界面上把「关闭」放在第一档，随时可退回。
+- 单位是**输出画布的像素**，不是内部坐标系那套 1125。因为它挡的是平台按比例裁掉的那一段，
+  固定像素最直观；换画布尺寸时（1080 / 1125 / 跟随屏幕）留白占比会略有不同，这是有意的。
+- `clampVideoSidePad(NaN)` 退回**默认值**而不是最小值：这里给的是「留多少」，退回 0 会悄悄把
+  安全区关掉。同理 `normalizePlaybackPrefs` 里缺字段时给默认值——旧偏好没有这一项，不能当成
+  用户主动关闭。
+
+### 偏好与界面接线
+
+- 偏好 `playback.videoSidePad`（`workspace-prefs.ts` 的默认值 / 归一化 / `canonical()` 三处都补了），
+  与其它视频设置一样，单聊页与批量页**共用同一份**（App 的 `videoSettings` / `patchVideoSettings`）。
+- 界面在 `VideoExportDialog` 里新开一段「两侧留白」，紧跟在「画面尺寸」之后：上面几个筹码做
+  快捷档，下面一个数字输入框填任意值。**同一个控件也出现在预览右上角的尺寸弹层里**（见下面
+  「预览里的取景框」），两处共用 `SidePadOption`、写的是同一个值。
+- 这段抽成了子组件 `SidePadOption`（`src/components/SidePadOption.tsx`），**因为它的输入草稿
+  要跟着弹层打开时的值走**：它挂在 `Dialog.Popup` / `Popover.Popup` 内部，而 base-ui 的
+  `DialogPortal` 默认 `keepMounted = false`（关闭即 `return null`，见 `portal/DialogPortal.js`），
+  所以每次打开都会重新挂载，`useState` 的初始值天然是最新值，**不需要同步 effect**（沿用
+  「预览弹层那条规则」）。它有个 `variant`：对话框里写全，预览弹层里只留一句——那边本来就窄，
+  而且旁边就是实时画面。
+- 输入框沿用「只在失焦 / 回车提交」的约定：输到一半的「1」不会被立刻夹成别的数。
+  档位高亮用 `videoSidePadIdFor()` **反查**（不是另存一个 mode）——它只看数值，落在档位之间
+  就是自定义，没有「档位与数值不一致」的状态可维护。
+
+### 预览里的取景框（`src/lib/video-frame.ts`）
+
+留白原本只体现在成片里：调完得导一遍、发出去、在手机上看。所以**开着留白时，预览直接换成
+「导出成视频的那一帧」**——手机按导出比例缩进画布、铺满上下居中，两侧露出来的底色就是成片里的
+边带，调多少当场变多少。
+
+- `videoFrameLayout(画布显示宽度, 输出尺寸, 屏幕尺寸, 留白)` 只算数字，不碰 DOM：先把屏幕尺寸过一遍
+  `videoContentScreen()`（留白生效时手机的比例跟着框走），再
+  `fitRect(1125, designHeightFor(content), 输出宽, 输出高, 留白)`，和录制时**同一套几何**
+  （滚动模式放进去的也是「一屏」那个窗口，见 `recordScrollingChatVideo` 的 `target`），
+  再把结果整体乘一个「预览像素 ÷ 输出像素」的系数。
+- 摆位交给 CSS：画布是 `display:flex` + 居中，手机尺寸由 `WorkspacePanels` 注入
+  `--workspace-phone-width/height/scale`。因为 `fitRect` 的 x / y 本来就是居中算的，
+  flex 居中与它逐像素一致，不用绝对定位。
+- 手机高度**一律用 `phoneDisplayHeight(phoneWidth, 屏幕尺寸)` 从宽度换算**，不直接用
+  `fitRect` 的高度：容器高度与缩放后的画面高度必须来自同一个数，否则会露出一条 1px 的缝
+  （`phone-size.ts` 里那条老约定的延续）。**这里的「屏幕尺寸」必须是 `videoContentScreen()`
+  那一份**，也就是录制时用的那份——父级渲染 `PhonePreview` 时传的是同一个值（App 的
+  `videoScreen`、`BatchStudio` 的 `videoScreen`）。第一版漏了这一步：容器高度仍旧按原始屏幕
+  比例算（手机 264×572），而手机本身已经被渲染成 264×604，于是框里上下各空 16px、底部还被
+  `overflow: hidden` 切掉一截——看着就是「怎么还是四周留白」。`video-frame.test.ts` 里有一条
+  专门盯这个（容器高度与框高最多差 1px 的取整误差，且按原始屏幕算会矮 30px 以上）。
+- 取景框里的手机**去掉机身外框与投影**，只留一条虚线标出内容边界——手机边缘常常与边带同色
+  （都是对话背景），不标就分不出留白有多少。那条虚线是「导览」，不在成片里。
+- 边带颜色取 `settings.backgroundColor`，与录制时 `background` 是同一个值；**故意不跟着
+  背景图走**，因为成片里拿的也是这个纯色。
+- 只读、不写：`videoFrame` 与 `videoSidePad` 都由 App / BatchStudio 传进来，`WorkspacePanels`
+  不改任何导出设置，也不碰 `phoneRef`（画布是 `phoneRef` 外面的壳，离屏渲染与截图完全不受影响）。
+- 关掉留白（0）就不画取景框，预览回到原来的手机视图——所以这项功能对不用它的人是零影响。
+- 开着取景框时「窗口大小」这一档调的是**取景框的宽度**（不是手机的宽度），自适应宽度也改按
+  画布比例算，宽度上限从 340 放宽到 380 把面板的宽度用满。代价是预览会比原来小一点
+  （9:16 画布下手机只占画布宽度的约 78%），看细节用右上角的专注模式放大。
+
+### 顺带改掉的文案
+
+`chat-video.ts` 里「1125×2436 满屏」与「跟随屏幕」两档的说明原先写着「手机铺满整个画面 /
+不额外留边」，现在留白是独立一项，所以改成「分辨率跟屏幕走，留白按那一项设置」。
+
+`VideoExportDialog` 里「画面尺寸」下面那句原写「…再等比放进这个画布，四周留对话底色」——
+留白越过后手机其实是铺满上下的，所以改成「…居中；两侧让出多少看下面的『两侧留白』」。
+`SidePadOption` 的两处说明也都改成了「图片…；视频…」两句并列，取景框下面那行同样补上
+「图片与长截图会照同样的像素加在左右两头」；聊天页预览区右上那行的副标题会写
+「，图片左右各留 120px」，不用点开弹层也知道图片会变宽。
+
+### 单测
+
+`video-frame.test.ts`（9 条）：画布比例与手机居中、**留白生效时上下一定铺满**（比例换成「画布去掉
+两侧留白」，而不是整体缩小）、留白越多手机越窄而高度始终铺满、**留白是「至少」**（调到画布自然
+留边以下不改画面）、画布与手机同比例时留白直接吃宽度、换屏幕尺寸后比例跟着变、非法尺寸全部退回 0
+（预览据此不画）、文案带画布尺寸与留白值、**容器高度必须按成片那一份屏幕尺寸换算**（差 1px 以内，
+盯住「怎么还是四周留白」那个坑）。
+
+`video-padding.test.ts`（11 条）：除档位与推荐值、夹取 / 归一化 / 反查 / 文案之外，
+**自然留边**（同比例画布与非法尺寸都是 0）、**没越过自然留边时原样返回**、**越过时换成内容框比例**
+（宽度不变、高度取整偏大以保证铺满）、**留白越大手机越细长且只会变高**（含画布比手机还窄的情况）、
+**图片补边只加宽度**（0 与不传参数完全一致、长截图算法同一条、越界夹取、非法尺寸给 0 好让调用方跳过）。
+
 
 

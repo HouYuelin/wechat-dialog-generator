@@ -28,7 +28,7 @@ export const videoSizeOptions: VideoSizeOption[] = [
     width: 1125,
     height: 2436,
     label: '1125×2436 满屏',
-    note: '与导出的长截图完全一致，手机铺满整个画面；发到竖屏平台可能被平台裁切。',
+    note: '与导出的长截图一致，手机铺满整个画面；发到竖屏平台通常会被裁切，可以靠下面的「两侧留白」让开。',
   },
 ]
 
@@ -42,7 +42,7 @@ export function videoSizeOptionsFor(screen: ScreenSize = defaultScreenSize): Vid
     width: screen.width,
     height: screen.height,
     label: '跟随屏幕',
-    note: `与屏幕尺寸一致（当前 ${screen.width}×${screen.height}），手机铺满整个画面，不额外留边。`,
+    note: `与屏幕尺寸一致（当前 ${screen.width}×${screen.height}）：分辨率跟着屏幕走，「两侧留白」照旧生效。`,
   }]
 }
 
@@ -59,18 +59,31 @@ export interface FitRect {
   scale: number
 }
 
-/** 源画面等比缩放到目标画布并居中，保证不裁切、不变形。 */
-export function fitRect(sourceWidth: number, sourceHeight: number, targetWidth: number, targetHeight: number): FitRect {
+/**
+ * 源画面等比缩放到目标画布并居中，保证不裁切、不变形。
+ *
+ * `sidePadding` 是给平台留的安全区（见 lib/video-padding.ts）：可用宽度先收窄
+ * 2×sidePadding，画面再按比例缩一点、整体居中，两侧留出来的空白由调用方用底色填充。
+ * 因为是「先收窄再等比缩放」，留白只会变大不会变小——9:16 这种比手机更窄的画布本来
+ * 就会左右留边，两者取较大者。传 0（默认）时结果与不带这个参数完全一致。
+ *
+ * 注意：**宽度收窄会连高度一起缩**。要让画面在留白之后仍然铺满上下，得让源画面本身的比例
+ * 跟上——那是 `videoContentScreen()` 的事（见 lib/video-padding.ts），这里只管等比摆放。
+ */
+export function fitRect(sourceWidth: number, sourceHeight: number, targetWidth: number, targetHeight: number, sidePadding = 0): FitRect {
   const positive = (value: number) => (Number.isFinite(value) && value > 0 ? value : 0)
   const sourceW = positive(sourceWidth)
   const sourceH = positive(sourceHeight)
   const targetW = positive(targetWidth)
   const targetH = positive(targetHeight)
   if (!sourceW || !sourceH || !targetW || !targetH) return { x: 0, y: 0, width: 0, height: 0, scale: 0 }
-  const scale = Math.min(targetW / sourceW, targetH / sourceH)
+  // 留白最多吃掉「除中间一列之外」的全部宽度，避免可用宽度归零后算出 0 尺寸的画面。
+  const pad = Math.min(Math.max(positive(sidePadding), 0), (targetW - 1) / 2)
+  const availWidth = Math.max(1, targetW - pad * 2)
+  const scale = Math.min(availWidth / sourceW, targetH / sourceH)
   const width = Math.round(sourceW * scale)
   const height = Math.round(sourceH * scale)
-  return { x: Math.round((targetW - width) / 2), y: Math.round((targetH - height) / 2), width, height, scale }
+  return { x: Math.round(pad + (availWidth - width) / 2), y: Math.round((targetH - height) / 2), width, height, scale }
 }
 
 /** 优先 MP4（剪辑软件与社交平台兼容性最好），不支持时逐级回落到 WebM。 */

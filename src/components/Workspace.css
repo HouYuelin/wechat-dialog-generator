@@ -69,6 +69,15 @@
 .workspace-preview-body .wc-phone-scale-wrap { position: relative; top: auto; width: var(--workspace-phone-width); height: var(--workspace-phone-height); margin: 0 auto; }
 .workspace-preview-body .wc-phone-wrap { width: var(--workspace-phone-width); height: var(--workspace-phone-height); border-radius: 32px; }
 .workspace-preview-body .wc-phone-content { transform: scale(var(--workspace-phone-scale)); }
+/* 视频取景框：手机按导出比例缩进画布、居中，左右露出来的底色就是成片里那两条边带
+   （上下不留白：留白生效时手机的比例已经换成「画布去掉两侧留白」那一份）。
+   画布的尺寸、手机的尺寸都由 WorkspacePanels 算好后注入，这里只负责摆位。 */
+.workspace-video-frame { display: flex; align-items: center; justify-content: center; overflow: hidden; border-radius: 6px; outline: 1px dashed #a8cdb5; outline-offset: 0; }
+.workspace-video-frame > * { flex: 0 0 auto; }
+/* 取景框里的手机就是成片里的那一块：没有机身外框与投影，只用一条虚线标出内容边界——
+   不标的话，手机边缘与边带往往同色（都是对话背景），根本分不出留白有多少。 */
+.workspace-video-frame .wc-phone-wrap { border-radius: 0; box-shadow: none; background: transparent; outline: 1px dashed rgba(0, 0, 0, 0.22); outline-offset: -1px; }
+.workspace-preview-header .workspace-preview-frame { color: var(--studio-primary); }
 .workspace-preview-actions { flex-shrink: 0; max-height: 46%; overflow-y: auto; padding: 10px 16px; border-top: 1px solid var(--studio-border); background: #fff; }
 .workspace-mobile-views.ui-segmented-control { display: none; width: 100%; }
 .workspace-editor-scroll .s-card { border: 1px solid var(--studio-border); border-radius: 8px; box-shadow: none; overflow: visible; margin-bottom: 12px; }
@@ -318,11 +327,18 @@
 .video-duration-row { display: flex; align-items: center; gap: 14px; }
 .video-duration-row .ui-slider { flex: 1; min-width: 0; }
 .video-duration-value { flex-shrink: 0; min-width: 46px; text-align: right; font-size: 12px; font-weight: 600; color: #27543c; font-variant-numeric: tabular-nums; }
+.video-safety-grid { display: grid; grid-template-columns: repeat(2, minmax(0, 1fr)); gap: 4px; }
+.video-safety-chip { min-height: 29px; padding: 0 6px; border: 1px solid var(--studio-border); border-radius: 6px; background: #fff; color: var(--studio-fg); font-size: 11px; font-variant-numeric: tabular-nums; cursor: pointer; }
+.video-safety-chip:hover { background: #f4f9f6; border-color: #c7dece; }
+.video-safety-chip[data-active='true'] { border-color: #a8cdb5; background: var(--studio-accent); color: var(--studio-accent-fg); font-weight: 600; }
+.video-pad-row { display: flex; align-items: center; gap: 7px; margin-top: 9px; font-size: 11px; color: var(--studio-muted); }
+.video-pad-row .ui-input { width: 78px; height: 30px; padding: 0 8px; font-size: 12px; font-variant-numeric: tabular-nums; }
 .video-summary { margin-top: 18px; padding: 12px 14px; border-radius: 8px; background: #f3f9f5; font-size: 11px; line-height: 1.9; color: #42604f; }
 .video-summary b { color: #27543c; }
 .video-dialog-actions { display: grid; grid-template-columns: auto minmax(0, 1fr); gap: 8px; margin-top: 18px; }
 .video-progress-backdrop { position: fixed; inset: 0; z-index: 62; display: grid; place-items: center; background: rgba(15, 32, 22, 0.5); }
 .video-progress-panel { width: min(400px, calc(100vw - 32px)); padding: 22px; border-radius: 10px; background: #fff; box-shadow: 0 24px 60px rgba(18, 45, 30, 0.25); }
+.video-progress-scope { margin:0 0 7px; font-size:11px; color:var(--studio-muted); overflow-wrap:anywhere; }
 .video-progress-title { display: flex; align-items: center; gap: 8px; font-size: 14px; font-weight: 600; }
 .video-progress-title svg { color: var(--studio-primary); }
 .video-progress-bar { height: 6px; margin-top: 14px; border-radius: 3px; background: #e6efe9; overflow: hidden; }

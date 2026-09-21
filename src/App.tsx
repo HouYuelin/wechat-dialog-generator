@@ -26,7 +26,7 @@ import { ExportLogPage } from '@/components/ExportLogPage';
 import { beginExportLog, exportLogError } from '@/lib/export-log';
 import { WorkspacePanels } from '@/components/WorkspacePanels';
 import { ChatPlaybackBar } from '@/components/ChatPlaybackBar';
-import { VideoExportDialog, VideoProgressOverlay, type VideoCaptureMode } from '@/components/VideoExportDialog';
+import { VideoExportDialog, VideoProgressOverlay, type VideoCaptureMode, type VideoExportSettings } from '@/components/VideoExportDialog';
 import { renderChatFrames, renderChatScrollFrame } from '@/components/chat-video-render';
 import {
   buildPlaybackTimeline,
@@ -39,6 +39,7 @@ import {
 import { pickVideoMimeType, videoContainerLabel, videoExportSupported, videoFileExtension, videoSizeOption, type VideoSizeId } from '@/lib/chat-video';
 import { screenSizeLabel, type ScreenSize } from '@/lib/phone-size';
 import { recordChatVideo, recordScrollingChatVideo } from '@/lib/chat-video-recorder';
+import { videoContentScreen } from '@/lib/video-padding';
 import { scrollVideoPlan } from '@/lib/chat-scroll-video';
 import { loadNotifySoundFile, notifyAudioContext, playNotify, resumeNotifyAudio, type NotifyCustomBuffers, type NotifyKind } from '@/lib/notify-sound';
 import {
@@ -126,7 +127,7 @@ import {
   renameMediaAsset,
   touchMediaAsset,
   type MediaAsset,
-  type MediaImportSummary,
+  type MediaImportOutcome,
   type MediaKind,
 } from '@/lib/media-library';
 import type { ChatUser, ChatMessage, PhoneSettings } from '@/types';
@@ -150,11 +151,6 @@ type BackgroundTarget = 'chat' | 'moments';
  */
 function preferredSettingsBase(): PhoneSettings {
   return settingsWithStyle(defaultPhoneSettings, getWorkspacePrefs().style);
-}
-
-interface MediaImportOutcome extends MediaImportSummary {
-  /** 与传入文件顺序一致、可以直接用的素材（库里已有同图时复用旧记录）。 */
-  picked: MediaAsset[];
 }
 
 /** 正在使用的自定义提示音：buffer 只在内存里，id 指回音效库记录（改名 / 删除时要跟着同步）。 */
@@ -237,9 +233,15 @@ function App() {
   // 录制方式决定后面几项设置怎么用：逐条播放调出现节奏，滚动到底调视频总时长。
   const [videoMode, setVideoMode] = useState<VideoCaptureMode>(() => getWorkspacePrefs().playback.videoMode);
   const [scrollDuration, setScrollDuration] = useState(() => getWorkspacePrefs().playback.scrollDuration);
+  // 视频两侧的安全留白：给抖音这类平台的裁切与浮层让位，见 lib/video-padding.ts。
+  const [videoSidePad, setVideoSidePad] = useState(() => getWorkspacePrefs().playback.videoSidePad);
   // 屏幕尺寸就是导出分辨率：图片、视频帧都按它渲染。
   const [screenSize, setScreenSize] = useState<ScreenSize>(() => getWorkspacePrefs().playback.screenSize);
   const [soundSource, setSoundSource] = useState<'synth' | 'custom'>(() => getWorkspacePrefs().playback.soundSource);
+  // 视频渲染与取景框该用的「屏幕尺寸」：留白越过画面自然留边时，换成「画布去掉两侧留白」的比例，
+  // 手机才会铺满上下、只左右留白（见 lib/video-padding.ts 的 videoContentScreen）。留白不越线时
+  // 它原样返回 screenSize。图片导出不经过它——截图与长截图仍然用 screenSize，一个像素都不变。
+  const videoScreen = videoContentScreen(screenSize, videoSizeOption(videoSize, screenSize), videoSidePad);
   /** 上次选的音效是否已经尝试恢复过：恢复是异步的（要先把音效库读出来），见下面那个 effect。 */
   const soundRestored = useRef(false);
   // 自定义提示音按收/发各存一条：收到替换「叮咚」，发送替换「咻」，互不影响。
@@ -369,23 +371,30 @@ function App() {
       videoSize,
       videoMode,
       scrollDuration,
+      videoSidePad,
+      // 批量页的「导出内容」（聊天图 / 聊天视频）由批量页自己写：它不在这个组件的状态里，
+      // 这里把当前值原样带回去，免得一次无关的设置变化把它冲掉。
+      batchOutput: getWorkspacePrefs().playback.batchOutput,
     };
     // 只写样式与播放导出这一半：预览的窗口宽度是 display 那一半，由尺寸弹层自己写，别在这里覆盖掉。
     patchWorkspacePrefs({ style: stylePrefsFromSettings(settings), playback });
-  }, [customSounds, playbackPace, screenSize, scrollDuration, settings, soundEnabled, soundReceive, soundSend, soundSource, videoMode, videoSize]);
+  }, [customSounds, playbackPace, screenSize, scrollDuration, settings, soundEnabled, soundReceive, soundSend, soundSource, videoMode, videoSize, videoSidePad]);
 
   /**
    * 记档：只要某位角色身上挂着头像，就把「角色名 + 头像」写进归档。
    * 这里只增不删——取消头像、换一张新的、角色离开对话都不会清掉记录，
    * 删除只发生在用户点「用过的头像」里那个删除按钮的时候。
+   * 聊天页的 effect 与批量页（在批量页里给某组换头像）都调它，规则只有一份。
    */
-  useEffect(() => {
-    if (!presetsReady || !users.length) return;
-    const { list, changed } = rememberUserAvatars(avatarPresets, users);
-    if (!changed.length) return;
-    setAvatarPresets(list);
-    void putAvatarPresets(changed).catch(() => {});
-  }, [avatarPresets, presetsReady, users]);
+  const rememberUsersForPresets = useCallback((list: ChatUser[]) => {
+    if (!presetsReady || !list.length) return;
+    const result = rememberUserAvatars(avatarPresets, list);
+    if (!result.changed.length) return;
+    setAvatarPresets(result.list);
+    void putAvatarPresets(result.changed).catch(() => {});
+  }, [avatarPresets, presetsReady]);
+
+  useEffect(() => { rememberUsersForPresets(users); }, [rememberUsersForPresets, users]);
 
   useEffect(() => {
     let cancelled = false;
@@ -921,6 +930,15 @@ function App() {
   // 归档里的一条是「某个名字用过的某张头像」。它能做的只有两件事：还给同名的那位角色，
   // 或者被手动删掉。取消头像、换新头像都不会动它，所以用户的头像不会莫名其妙消失。
 
+  /** 记一次使用：让归档里的这一条排到最前并落盘。聊天页与批量页换头像都走这里。 */
+  const touchPreset = useCallback((preset: AvatarPreset) => {
+    const tapped = touchAvatarPreset(avatarPresets, preset.id);
+    if (tapped === avatarPresets) return;
+    setAvatarPresets(tapped);
+    const touched = tapped.find(item => item.id === preset.id);
+    if (touched) void putAvatarPresets([touched]).catch(() => {});
+  }, [avatarPresets]);
+
   /** 把归档里的头像还给同名的角色；这个角色不在当前对话里就只记一次使用，不做别的。 */
   const handleUsePreset = useCallback((preset: AvatarPreset) => {
     const owner = users.find(user => avatarNameKey(user.name) === avatarNameKey(preset.name));
@@ -928,15 +946,10 @@ function App() {
       showToast(`当前对话里没有「${preset.name}」这个角色，这张头像先留在用过的头像里。`);
       return;
     }
-    const tapped = touchAvatarPreset(avatarPresets, preset.id);
-    if (tapped !== avatarPresets) {
-      setAvatarPresets(tapped);
-      const touched = tapped.find(item => item.id === preset.id);
-      if (touched) void putAvatarPresets([touched]).catch(() => {});
-    }
+    touchPreset(preset);
     setUsers(prev => prev.map(user => user.id === owner.id ? { ...user, avatar: preset.avatar } : user));
     showToast(`已为「${owner.name}」换上这张头像。`);
-  }, [avatarPresets, showToast, users]);
+  }, [showToast, touchPreset, users]);
 
   const handleRemovePreset = useCallback((preset: AvatarPreset) => {
     setAvatarPresets(prev => removeAvatarPreset(prev, preset.id));
@@ -1187,9 +1200,13 @@ function App() {
     if (renamed) void putMediaAssets([renamed]).catch(() => {});
   }, [library]);
 
+  // 生成图片 / 长截图 / 复制都走这里：两侧留白对图片同样生效，直接补在导出图的左右
+  // （视频那边由录制合成时加，所以 chat-video-render 传的是 0）。
   const capturePhone = useCallback(async (longshot = false) => {
-    return phoneRef.current ? captureChatPhone(phoneRef.current, longshot, screenSize) : null;
-  }, [screenSize]);
+    return phoneRef.current
+      ? captureChatPhone(phoneRef.current, longshot, screenSize, { sidePad: videoSidePad, background: settings.backgroundColor })
+      : null;
+  }, [screenSize, videoSidePad, settings.backgroundColor]);
 
   // ===================== 定时发送播放 =====================
   // 播放与导出视频共用这条时间轴：预览里看到的速度就是导出视频的速度。
@@ -1418,6 +1435,9 @@ function App() {
   const handleExportVideo = useCallback(async () => {
     if (!messages.length || videoTooLong || !videoSupported) return;
     const size = videoSizeOption(videoSize, screenSize);
+    // 录进画布的那一份：留白生效时手机的画面比例换成「画布去掉两侧留白」，这样它铺满上下、
+    // 两侧正好让出留白，而不是整体缩小后在上下也空出底色。采样密度（宽度 / 1125）不变。
+    const renderScreen = videoContentScreen(screenSize, size, videoSidePad);
     const mimeType = pickVideoMimeType(type => MediaRecorder.isTypeSupported(type));
     const scrolling = videoMode === 'scroll';
     const filename = (scrolling ? '微信聊天滚动视频_' : '微信聊天视频_') + Date.now() + '.' + videoFileExtension(mimeType);
@@ -1450,7 +1470,7 @@ function App() {
       // 两条路径各自先把画面准备好：滚动模式是一张长图，逐条模式是每多一条消息一帧。
       let record: () => Promise<Awaited<ReturnType<typeof recordChatVideo>>>;
       if (scrolling) {
-        const frame = await renderChatScrollFrame({ users, messages, settings, selfId, screen: screenSize }, { token: videoToken.current });
+        const frame = await renderChatScrollFrame({ users, messages, settings, selfId, screen: renderScreen }, { token: videoToken.current });
         record = () => recordScrollingChatVideo({
           image: frame.blob,
           viewport: frame.viewport,
@@ -1458,12 +1478,13 @@ function App() {
           bottomChromeHeight: frame.bottomChromeHeight,
           size: { width: size.width, height: size.height },
           background: settings.backgroundColor || '#ededed',
+          sidePadding: videoSidePad,
           plan: scrollRecording,
           token: videoToken.current,
           onProgress: (elapsedMs, recordMs) => setVideoProgress({ stage: 'record', current: 0, total: messages.length, elapsedMs, totalMs: recordMs }),
         });
       } else {
-        const frames = await renderChatFrames({ users, messages, settings, selfId, screen: screenSize }, {
+        const frames = await renderChatFrames({ users, messages, settings, selfId, screen: renderScreen }, {
           token: videoToken.current,
           onProgress: (current, total) => setVideoProgress({ stage: 'render', current, total, elapsedMs: 0, totalMs }),
         });
@@ -1475,6 +1496,7 @@ function App() {
           totalMs: timeline.totalMs,
           size: { width: size.width, height: size.height },
           background: settings.backgroundColor || '#ededed',
+          sidePadding: videoSidePad,
           notifyAt: soundEvents,
           audio: audioContext ? {
             context: audioContext,
@@ -1511,7 +1533,7 @@ function App() {
     } finally {
       setVideoProgress(null);
     }
-  }, [users, messages, settings, selfId, videoSize, videoMode, scrollPlan, screenSize, videoTooLong, videoSupported, playbackTimeline, notifyAt, soundSource, customSounds, showToast, authorizeExport, completeExport, promptAfterExport, downloadBlob, unlockAudio, unlimited, visibleQuota.total_remaining, accountSession, openOfficialAccountPrompt]);
+  }, [users, messages, settings, selfId, videoSize, videoMode, scrollPlan, screenSize, videoSidePad, videoTooLong, videoSupported, playbackTimeline, notifyAt, soundSource, customSounds, showToast, authorizeExport, completeExport, promptAfterExport, downloadBlob, unlockAudio, unlimited, visibleQuota.total_remaining, accountSession, openOfficialAccountPrompt]);
 
   const handleGenerateImage = useCallback(async () => {
     if (!phoneRef.current) return;
@@ -1624,6 +1646,35 @@ function App() {
           ? '点一张放进「添加消息 → 图片」，再点添加即可。'
           : '上传过的头像、表情、背景图和商品图都会留在这里，下次直接点选即可，不用再翻本地文件。';
 
+  // 视频设置只有一份（都来自「我的偏好」）：聊天页的生成视频弹窗与批量页的视频设置共用它，
+  // 在任一页改过，另一页打开就是同一个值。
+  const videoSettings: VideoExportSettings = {
+    mode: videoMode,
+    size: videoSize,
+    pace: playbackPace,
+    scrollDurationSeconds: scrollDuration,
+    sidePad: videoSidePad,
+    soundEnabled,
+    soundReceive,
+    soundSend,
+    soundSource,
+    customSounds: {
+      received: customSounds.received ? { name: customSounds.received.name, durationSeconds: customSounds.received.durationSeconds } : null,
+      sent: customSounds.sent ? { name: customSounds.sent.name, durationSeconds: customSounds.sent.durationSeconds } : null,
+    },
+  };
+  const patchVideoSettings = (patch: Partial<VideoExportSettings>) => {
+    if (patch.mode) setVideoMode(patch.mode);
+    if (patch.size) setVideoSize(patch.size);
+    if (patch.pace) setPlaybackPace(patch.pace);
+    if (patch.scrollDurationSeconds !== undefined) setScrollDuration(patch.scrollDurationSeconds);
+    if (patch.sidePad !== undefined) setVideoSidePad(patch.sidePad);
+    if (patch.soundEnabled !== undefined) setSoundEnabled(patch.soundEnabled);
+    if (patch.soundReceive !== undefined) setSoundReceive(patch.soundReceive);
+    if (patch.soundSend !== undefined) setSoundSend(patch.soundSend);
+    if (patch.soundSource) setSoundSource(patch.soundSource);
+  };
+
   return (
     <>
       <div className={`studio-app ${isWorking ? 'is-working' : ''}`}>
@@ -1654,12 +1705,32 @@ function App() {
             {route === 'home' && <div className="studio-page-scroll"><ToolHome onNavigate={navigate} hasDraft={hasMessages} promotion={<RewardPromotion session={accountSession} refreshKey={`${accountPrompt}:${shareOpen}`} onShare={() => setShareOpen(true)} onAccount={() => { setAccountError(''); setAccountPrompt(true); }} />} /></div>}
             {route === 'resources' && <main className="studio-page-scroll studio-resources"><StudioLink route="home" onNavigate={navigate} className="studio-back-link"><ArrowLeft size={15} /> 返回工具概览</StudioLink><h1>模板与使用指南</h1><p className="studio-page-description">挑选一个示例，在独立工作页中继续编辑。</p><GrowthContent onUseTemplate={handleUseTemplate} onOpenEditor={() => { setChatSection('content'); navigate('chat'); }} /><footer className="analytics-note">创作内容和图片在本地处理；主动分享同款时，对话文字会写入分享链接。账号服务保存邮箱、验证和额度 / 邀请记录，访问统计使用匿名标识。</footer></main>}
             {isWorking && <h1 className="studio-work-title sr-only">{workspaceTools.find(tool => tool.id === activeTool)?.title}</h1>}
-            <div className="studio-tool-page" hidden={route !== 'batch'}><BatchStudio currentChat={{ users, messages, settings, selfId }} remaining={visibleQuota.total_remaining} unlimited={unlimited} onDebit={debitBatchExport} onComplete={id => {
+            <div className="studio-tool-page" hidden={route !== 'batch'}><BatchStudio currentChat={{ users, messages, settings, selfId }} remaining={visibleQuota.total_remaining} unlimited={unlimited} onDebit={debitBatchExport} screen={screenSize} onScreenChange={setScreenSize} mediaAssets={library} libraryReady={libraryReady} onImportMedia={importMedia} onMarkAssetUsed={markAssetUsed} onRemoveAsset={handleRemoveAsset} onRenameAsset={handleRenameAsset} avatarPresets={avatarPresets} presetsReady={presetsReady} onTouchPreset={touchPreset} onRenamePreset={handleRenamePreset} onRemovePreset={handleRemovePreset} onRememberUsers={rememberUsersForPresets} video={{
+              settings: videoSettings,
+              onSettingsChange: patchVideoSettings,
+              supported: videoSupported,
+              containerLabel: videoContainer,
+              soundLibraryCount: soundLibrary.length,
+              onSoundFile: (file, kind) => void handleSoundFile(file, kind),
+              onOpenSoundLibrary: soundLibraryReady ? kind => { setSoundPickTarget(kind); setSoundError(''); setSoundLibraryOpen(true); } : undefined,
+              soundError,
+              // 音频上下文必须在用户手势里解锁，批量页会在点「导出所选视频」时调它。
+              resolveAudio: () => {
+                const context = unlockAudio();
+                return context ? {
+                  context,
+                  buffers: soundSource === 'custom'
+                    ? { received: customSounds.received?.buffer ?? null, sent: customSounds.sent?.buffer ?? null }
+                    : {},
+                } : null;
+              },
+            }} onComplete={(id, output) => {
               if (batchOwners.current.get(id) !== 'guest') completeExport(id);
-              void trackProductEvent('image_exported', { capture_mode: 'standard', tool: 'batch' });
+              if (output === 'video') void trackProductEvent('video_exported', { capture_mode: videoSize, render_mode: videoMode, tool: 'batch' });
+              else void trackProductEvent('image_exported', { capture_mode: 'standard', tool: 'batch' });
             }} /></div>
             <div className="studio-tool-page" hidden={route !== 'chat'} id="editor" ref={editorRef}>
-              <WorkspacePanels previewTitle="聊天效果预览" previewDescription={`可滚动查看消息 · 导出 ${screenSizeLabel(screenSize)}`} screen={screenSize} onScreenChange={setScreenSize} imageMax={settings.imageMax} onImageMaxChange={value => setSettings(current => ({ ...current, imageMax: value }))} fontScale={settings.fontScale} onFontScaleChange={value => setSettings(current => ({ ...current, fontScale: value }))} preview={<PhonePreview users={users} messages={previewMessages} settings={settings} selfId={selfId} phoneRef={phoneRef} onUpdateMessage={handleUpdateMessage} screen={screenSize} onPickSticker={libraryReady ? msgId => setLibraryPicker({ kind: 'sticker', msgId }) : undefined} onUploadImage={libraryReady ? (_msgId, file) => uploadImageFile(file) : undefined} />}
+              <WorkspacePanels previewTitle="聊天效果预览" previewDescription={`可滚动查看消息 · 导出 ${screenSizeLabel(screenSize)}${videoSidePad > 0 ? `，图片左右各留 ${videoSidePad}px` : ''}`} screen={screenSize} onScreenChange={setScreenSize} imageMax={settings.imageMax} onImageMaxChange={value => setSettings(current => ({ ...current, imageMax: value }))} fontScale={settings.fontScale} onFontScaleChange={value => setSettings(current => ({ ...current, fontScale: value }))} videoSidePad={videoSidePad} onVideoSidePadChange={setVideoSidePad} videoFrame={{ output: videoSizeOption(videoSize, screenSize), background: settings.backgroundColor || '#ededed' }} preview={<PhonePreview users={users} messages={previewMessages} settings={settings} selfId={selfId} phoneRef={phoneRef} onUpdateMessage={handleUpdateMessage} screen={videoScreen} onPickSticker={libraryReady ? msgId => setLibraryPicker({ kind: 'sticker', msgId }) : undefined} onUploadImage={libraryReady ? (_msgId, file) => uploadImageFile(file) : undefined} />}
                 previewActions={<div className="chat-export-actions">
                   <ChatPlaybackBar
                     active={playbackActive}
@@ -1818,30 +1889,8 @@ function App() {
       <VideoExportDialog
         open={videoOpen}
         onOpenChange={open => { setVideoOpen(open); if (!open) setSoundError(''); }}
-        settings={{
-          mode: videoMode,
-          size: videoSize,
-          pace: playbackPace,
-          scrollDurationSeconds: scrollDuration,
-          soundEnabled,
-          soundReceive,
-          soundSend,
-          soundSource,
-          customSounds: {
-            received: customSounds.received ? { name: customSounds.received.name, durationSeconds: customSounds.received.durationSeconds } : null,
-            sent: customSounds.sent ? { name: customSounds.sent.name, durationSeconds: customSounds.sent.durationSeconds } : null,
-          },
-        }}
-        onChange={patch => {
-          if (patch.mode) setVideoMode(patch.mode);
-          if (patch.size) setVideoSize(patch.size);
-          if (patch.pace) setPlaybackPace(patch.pace);
-          if (patch.scrollDurationSeconds !== undefined) setScrollDuration(patch.scrollDurationSeconds);
-          if (patch.soundEnabled !== undefined) setSoundEnabled(patch.soundEnabled);
-          if (patch.soundReceive !== undefined) setSoundReceive(patch.soundReceive);
-          if (patch.soundSend !== undefined) setSoundSend(patch.soundSend);
-          if (patch.soundSource) setSoundSource(patch.soundSource);
-        }}
+        settings={videoSettings}
+        onChange={patchVideoSettings}
         messageCount={messages.length}
         soundCount={notifyAt.length}
         // 两种模式的耗时构成完全不同：逐条模式是「每帧渲染 + 按节奏录制」，

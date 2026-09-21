@@ -1,0 +1,74 @@
+/* 微信表情面板：按钮 + 展开的分组网格（见 EmojiPicker.tsx） */
+.emoji-picker {
+  display: flex;
+  flex-direction: column;
+  gap: 6px;
+  align-items: flex-start;
+}
+.emoji-picker-toggle {
+  gap: 5px;
+}
+.emoji-picker-panel {
+  width: 100%;
+  max-height: 268px;
+  overflow-y: auto;
+  display: flex;
+  flex-direction: column;
+  gap: 6px;
+  padding: 8px;
+  border: 1px solid var(--control-input-border, #d6dfd9);
+  border-radius: 10px;
+  background: #fff;
+}
+.emoji-picker-label {
+  font-size: 10px;
+  color: var(--control-muted, #627068);
+}
+.emoji-picker-tabs {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 4px;
+}
+.emoji-picker-tab {
+  border: 0;
+  background: #f1f5f2;
+  color: #4d6558;
+  border-radius: 999px;
+  padding: 3px 9px;
+  font-size: 10px;
+  cursor: pointer;
+}
+.emoji-picker-tab.is-active {
+  background: #1f7a4d;
+  color: #fff;
+}
+.emoji-picker-grid {
+  display: grid;
+  grid-template-columns: repeat(auto-fill, minmax(30px, 1fr));
+  gap: 2px;
+}
+.emoji-picker-item {
+  border: 0;
+  background: none;
+  border-radius: 6px;
+  padding: 3px 0;
+  /* 直接铺 emoji 字符（不是图片），跟着这行字号走。 */
+  font-size: 20px;
+  line-height: 1.1;
+  cursor: pointer;
+  font-family: 'Apple Color Emoji', 'Segoe UI Emoji', 'Noto Color Emoji', 'Twemoji Mozilla', sans-serif;
+}
+.emoji-picker-item:hover {
+  background: #eef6f1;
+}
+.emoji-picker-hint {
+  margin: 0;
+  font-size: 10px;
+  line-height: 1.5;
+  color: var(--control-muted, #627068);
+}
+.emoji-picker-hint code {
+  background: #f1f5f2;
+  border-radius: 4px;
+  padding: 0 3px;
+}

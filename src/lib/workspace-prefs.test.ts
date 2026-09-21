@@ -14,6 +14,7 @@ import {
 } from './workspace-prefs'
 import { defaultImageMax, maxImageMax } from './image-size'
 import { defaultFontScale, maxFontScale } from './font-size'
+import { defaultVideoSidePad, maxVideoSidePad } from './video-padding'
 import { defaultScreenSize } from './phone-size'
 
 test('出厂默认值只有一处：样式偏好 + 空标题就是默认设置', () => {
@@ -79,6 +80,8 @@ test('脏数据整份兜底，逐字段校验', () => {
       videoSize: 'square',
       videoMode: 'loop',
       scrollDuration: 999,
+      videoSidePad: maxVideoSidePad + 500,
+      batchOutput: 'gif',
     },
   })
 
@@ -107,6 +110,13 @@ test('脏数据整份兜底，逐字段校验', () => {
   assert.equal(washed.playback.videoSize, defaultPlaybackPrefs.videoSize)
   assert.equal(washed.playback.videoMode, defaultPlaybackPrefs.videoMode)
   assert.equal(washed.playback.scrollDuration, 60)
+  assert.equal(washed.playback.videoSidePad, maxVideoSidePad, '越界的留白夹到上限')
+  assert.equal(
+    normalizeWorkspacePrefs({ playback: { videoSidePad: 'wide' } }).playback.videoSidePad,
+    defaultVideoSidePad,
+    '留白只认数字，字符串等脏值退回默认值而不是当成 0',
+  )
+  assert.equal(washed.playback.batchOutput, defaultPlaybackPrefs.batchOutput)
 
   const washedDisplay = normalizeWorkspacePrefs({
     display: { phoneSize: 'huge', customPhoneWidth: 99999 },
@@ -127,6 +137,8 @@ test('缺字段的旧数据只丢那一项，其余照常读出来', () => {
   assert.equal(partial.playback.soundSource, 'custom')
   assert.deepEqual(partial.playback.soundIds, { received: 'sound-1', sent: null })
   assert.equal(partial.playback.pace, defaultPlaybackPrefs.pace)
+  assert.equal(partial.playback.videoSidePad, defaultVideoSidePad, '旧偏好没有这一项时安全区默认是开着的')
+  assert.equal(partial.playback.batchOutput, defaultPlaybackPrefs.batchOutput, '没有这个字段的旧偏好照常读出来')
 })
 
 test('键序不同也算同一份偏好，避免每渲染一次就写一遍存储', () => {
@@ -143,6 +155,8 @@ test('键序不同也算同一份偏好，避免每渲染一次就写一遍存�
       soundSource: prefs.playback.soundSource,
       videoSize: prefs.playback.videoSize,
       videoMode: prefs.playback.videoMode,
+      videoSidePad: prefs.playback.videoSidePad,
+      batchOutput: prefs.playback.batchOutput,
     },
     style: stylePrefsFromSettings({ ...defaultPhoneSettings, contactName: '张伟' }),
     display: { customPhoneWidth: prefs.display.customPhoneWidth, phoneSize: prefs.display.phoneSize },
@@ -159,6 +173,10 @@ test('键序不同也算同一份偏好，避免每渲染一次就写一遍存�
   assert.equal(workspacePrefsEqual(prefs, soundPicked), false)
   const screenChanged = { ...prefs, playback: { ...prefs.playback, screenSize: { width: 1080, height: 1920 } } }
   assert.equal(workspacePrefsEqual(prefs, screenChanged), false)
+  const batchSwitched = { ...prefs, playback: { ...prefs.playback, batchOutput: 'video' as const } }
+  assert.equal(workspacePrefsEqual(prefs, batchSwitched), false, '批量页切到视频也要写进去')
+  const padWidened = { ...prefs, playback: { ...prefs.playback, videoSidePad: 200 } }
+  assert.equal(workspacePrefsEqual(prefs, padWidened), false, '改两侧留白也要写进去')
   const windowResized = { ...prefs, display: { ...prefs.display, phoneSize: 'large' as const } }
   assert.equal(workspacePrefsEqual(prefs, windowResized), false)
   const widthTyped = { ...prefs, display: { ...prefs.display, customPhoneWidth: 600 } }

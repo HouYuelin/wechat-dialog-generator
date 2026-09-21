@@ -7,12 +7,46 @@ import {
     screenOutputSize,
     type ScreenSize,
 } from '@/lib/phone-size';
+import { clampVideoSidePad, paddedImageSize } from '@/lib/video-padding';
 
 /** 超过这个高度浏览器就画不出来（截出来会是空白），长截图必须挡在这里。 */
 const maxCanvasHeight = 16000;
 
+export interface CaptureChatOptions {
+    /**
+     * 两侧留白（输出像素），见 lib/video-padding.ts。图片导出直接加在左右两头；
+     * 视频帧传 0——视频那边留白是在合成到画布时加的，帧本身要保持手机原始比例。
+     */
+    sidePad?: number;
+    /** 留白带的填充色，通常给对话背景色。不传就用默认底色。 */
+    background?: string;
+}
+
+/**
+ * 把两侧留白补到截图左右：新建一张更宽的画布，先铺底色，再把原图居中贴上去。
+ *
+ * 图片和视频在这件事上不一样：视频的画布尺寸是固定的（比如 1080×1920），画面得换比例去
+ * 铺满高度；图片没有画布，一张截图就是手机本身，所以只加宽、不动比例。
+ */
+function withSidePadding(source: HTMLCanvasElement, pad: number, background?: string) {
+    const size = paddedImageSize({ width: source.width, height: source.height }, pad);
+    if (!size.width || !size.height) return source;
+    const target = document.createElement('canvas');
+    target.width = size.width;
+    target.height = size.height;
+    const ctx = target.getContext('2d');
+    if (!ctx) return source;
+    ctx.fillStyle = background || '#ededed';
+    ctx.fillRect(0, 0, size.width, size.height);
+    ctx.drawImage(source, pad, 0);
+    // 原图已经画进新画布，早点释放，长截图时这一下能省几十 MB。
+    source.width = 0;
+    source.height = 0;
+    return target;
+}
+
 // Shared by the existing single-chat editor and batch exports.
-export async function captureChatPhone(phone: HTMLDivElement, longshot = false, screen: ScreenSize = defaultScreenSize): Promise<HTMLCanvasElement | null> {
+export async function captureChatPhone(phone: HTMLDivElement, longshot = false, screen: ScreenSize = defaultScreenSize, options: CaptureChatOptions = {}): Promise<HTMLCanvasElement | null> {
     const content = phone.closest('.wc-phone-content') as HTMLElement | null;
     const wrap = phone.closest('.wc-phone-wrap') as HTMLElement | null;
     const scaleWrap = phone.closest('.wc-phone-scale-wrap') as HTMLElement | null;
@@ -102,6 +136,9 @@ export async function captureChatPhone(phone: HTMLDivElement, longshot = false, 
         pixelRatio: 1,
         backgroundColor: '#ededed',
       });
+      // 两侧留白只加在导出的图上，截图过程一行没变（见 CaptureChatOptions）。
+      const sidePad = clampVideoSidePad(options.sidePad ?? 0);
+      if (sidePad > 0) canvas = withSidePadding(canvas, sidePad, options.background);
     } finally {
       // 还原所有样式
       content.style.transform = saved.ct; content.style.transformOrigin = saved.co;

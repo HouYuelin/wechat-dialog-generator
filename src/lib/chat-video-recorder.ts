@@ -197,6 +197,8 @@ export interface RecordChatVideoOptions {
   size: { width: number; height: number }
   /** 竖屏画布两侧的留底色，通常取对话背景色。 */
   background: string
+  /** 两侧安全留白（输出像素）：画面再缩一点给平台的裁切与浮层让位，见 lib/video-padding.ts。 */
+  sidePadding?: number
   /** 提示音出现的时刻与音效类型，与 frameAtMs 同一条时间轴。 */
   notifyAt: NotifyEvent[]
   audio?: ChatVideoAudioOptions | null
@@ -209,7 +211,7 @@ export async function recordChatVideo(options: RecordChatVideoOptions): Promise<
   const { frames, frameAtMs, totalMs } = options
   if (!frames.length) throw new Error('缺少画面帧，请重新生成。')
 
-  const rect = fitRect(options.frameWidth, options.frameHeight, options.size.width, options.size.height)
+  const rect = fitRect(options.frameWidth, options.frameHeight, options.size.width, options.size.height, options.sidePadding ?? 0)
   const paintBackground = (context: CanvasRenderingContext2D) => {
     context.fillStyle = options.background
     context.fillRect(0, 0, options.size.width, options.size.height)
@@ -286,6 +288,8 @@ export interface RecordScrollingChatVideoOptions {
   bottomChromeHeight: number
   size: { width: number; height: number }
   background: string
+  /** 两侧安全留白（输出像素），与逐条模式同一套，见 lib/video-padding.ts。 */
+  sidePadding?: number
   plan: ScrollVideoPlan
   token?: { cancelled: boolean }
   onProgress?: (elapsedMs: number, totalMs: number) => void
@@ -364,7 +368,7 @@ export async function recordScrollingChatVideo(options: RecordScrollingChatVideo
       viewportCanvas.height = viewport.height
       viewportContext = viewportCanvas.getContext('2d')
       if (!viewportContext) throw new Error('无法创建视频画布，请重试。')
-      target = fitRect(viewport.width, viewport.height, options.size.width, options.size.height)
+      target = fitRect(viewport.width, viewport.height, options.size.width, options.size.height, options.sidePadding ?? 0)
     },
     release: () => {
       if (objectUrl) {

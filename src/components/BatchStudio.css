@@ -80,6 +80,9 @@
 .batch-chat-preview > p { max-width:320px; margin:8px auto 0; }
 .batch-export { font-size:12px; line-height:1.65; }
 .batch-export p { margin:5px 0; }
+.batch-export-mode { display:flex; align-items:center; gap:8px; flex-wrap:wrap; margin-bottom:8px; padding-bottom:8px; border-bottom:1px solid #e6ece8; color:#496051; }
+.batch-export-mode > .ui-segmented-control { flex:1; min-width:132px; }
+.batch-export-mode .ui-segmented-item { flex:1; min-height:30px; padding:0 8px; font-size:12px; white-space:nowrap; }
 .batch-progress { display:flex; justify-content:space-between; gap:5px 12px; flex-wrap:wrap; color:#496051; font-size:12px; font-variant-numeric:tabular-nums; }
 .batch-progress-bar { width:100%; margin:2px 0 4px; }
 .batch-studio .batch-confirm { display:flex; align-items:flex-start; gap:8px; font-size:12px; font-weight:400; margin:7px 0 9px; color:#42594a; }

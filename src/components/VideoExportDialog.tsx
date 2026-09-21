@@ -1,8 +1,9 @@
-import { useRef } from 'react'
+import { useRef, type ReactNode } from 'react'
 import { Dialog } from '@base-ui/react/dialog'
 import { Button } from './ui/button'
 import { SegmentedControl, Slider, Switch } from './ui/controls'
-import { AlertTriangle, Download, FolderOpen, Music, Timer, Video, X } from 'lucide-react'
+import { SidePadOption } from './SidePadOption'
+import { AlertTriangle, Check, Download, FolderOpen, Music, Timer, Video, X } from 'lucide-react'
 import {
   playbackPaceLabels,
   playbackPaces,
@@ -39,6 +40,8 @@ export interface VideoExportSettings {
   pace: PlaybackPace
   /** 滚动模式的视频总时长（秒）。 */
   scrollDurationSeconds: number
+  /** 两侧安全留白（输出像素），0 表示不额外留白。见 lib/video-padding.ts。 */
+  sidePad: number
   /** 提示音总开关。 */
   soundEnabled: boolean
   /** 收到对方消息时是否响一声。 */
@@ -61,6 +64,10 @@ interface VideoExportDialogProps {
   estimatedMs: number
   durationLabel: string
   containerLabel: string
+  /** 批量导出时的组数：给了就按「一批」的口径描述、计数，主按钮也改成「完成」。 */
+  groupCount?: number
+  /** 覆盖默认的说明文案（批量页有自己的一句）。 */
+  description?: ReactNode
   /** 当前屏幕尺寸（导出分辨率），决定「跟随屏幕」这一档的实际大小。 */
   screen?: ScreenSize
   /** 当前浏览器是否支持本地录制视频。 */
@@ -78,10 +85,13 @@ interface VideoExportDialogProps {
 /**
  * 下载前的视频选项：画面尺寸、消息节奏、提示音的范围与音源都放在这里选，
  * 默认值沿用播放条上的设置，避免两处各调一遍。
+ *
+ * 批量聊天制作复用同一个弹窗：传了 `groupCount` 就按「一批」的口径描述与计数，
+ * 并且把主按钮改成「完成」——批量那一次导出由队列那边的按钮发起，这里只管设置。
  */
 export function VideoExportDialog({
   open, onOpenChange, settings, onChange, messageCount, soundCount, estimatedMs, durationLabel, containerLabel,
-  screen = defaultScreenSize, supported, soundError, onSoundFile, onOpenSoundLibrary, soundLibraryCount = 0, onConfirm,
+  screen = defaultScreenSize, supported, soundError, onSoundFile, onOpenSoundLibrary, soundLibraryCount = 0, groupCount, description, onConfirm,
 }: VideoExportDialogProps) {
   const fileRef = useRef<HTMLInputElement>(null)
   const fileKindRef = useRef<NotifyKind>('received')
@@ -89,6 +99,9 @@ export function VideoExportDialog({
   const activeSize = sizeOptions.find(option => option.id === settings.size) ?? sizeOptions[0]
   const scrolling = settings.mode === 'scroll'
   const scrollPlan = scrollVideoPlan(settings.scrollDurationSeconds * 1000)
+  // 批量：一次性给很多组录视频，计数与措辞都按「几组」说。
+  const batch = groupCount !== undefined
+  const scope = batch ? `${groupCount} 组 · ` : ''
   // 自定义音频按收/发各自检查：哪一类开了、又选了「我的音频」，就得给它挑一条音频；
   // 没挑的那一类自动退回内置合成音，不会静音。滚动模式根本不发声，不要求任何音频。
   const customSource = !scrolling && settings.soundEnabled && settings.soundSource === 'custom'
@@ -102,10 +115,10 @@ export function VideoExportDialog({
       <Dialog.Backdrop className="video-dialog-backdrop" />
       <Dialog.Popup className="video-dialog-popup" aria-label="生成视频">
         <div className="video-dialog-topline">
-          <Dialog.Title className="video-dialog-title"><Video size={16} /> 生成聊天视频</Dialog.Title>
+          <Dialog.Title className="video-dialog-title"><Video size={16} /> {batch ? '批量视频设置' : '生成聊天视频'}</Dialog.Title>
           <Dialog.Close render={<Button variant="ghost" size="icon" aria-label="关闭" />}><X size={17} /></Dialog.Close>
         </div>
-        <Dialog.Description className="video-dialog-description">把这段对话录制成视频文件下载到本机。逐条播放会一条条出现并带提示音，滚动到底适合把一段长对话完整展示出来。</Dialog.Description>
+        <Dialog.Description className="video-dialog-description">{description ?? '把这段对话录制成视频文件下载到本机。逐条播放会一条条出现并带提示音，滚动到底适合把一段长对话完整展示出来。'}</Dialog.Description>
 
         <div className="video-option">
           <h3>录制方式 <small>{videoCaptureModeLabels[settings.mode]}</small></h3>
@@ -131,8 +144,11 @@ export function VideoExportDialog({
             options={sizeOptions.map(option => ({ value: option.id, label: option.label }))}
           />
           <p className="video-option-note">{activeSize.note}</p>
-          {settings.size !== 'screen' && <p className="video-option-note">手机画面按 <b>{screenSizeLabel(screen)}</b> 渲染，再等比放进这个画布，四周留对话底色。</p>}
+          {settings.size !== 'screen' && <p className="video-option-note">手机画面按 <b>{screenSizeLabel(screen)}</b> 渲染，再等比放进这个画布居中；两侧让出多少看下面的「两侧留白」。</p>}
         </div>
+
+        {/* 与预览右上角那个尺寸弹层共用同一个控件，改哪边都一样。 */}
+        <div className="video-option"><SidePadOption value={settings.sidePad} onChange={sidePad => onChange({ sidePad })} /></div>
 
         {scrolling
           ? <div className="video-option">
@@ -151,13 +167,14 @@ export function VideoExportDialog({
             <p className="video-option-note">时长就是这个视频的长度。导出分辨率越低，同样内容占的像素越少，能装下的对话越长。</p>
           </div>
           : <div className="video-option">
-            <h3>消息出现节奏 <small>{messageCount} 条 · {durationLabel}</small></h3>
+            <h3>消息出现节奏 <small>{scope}{messageCount} 条 · {durationLabel}</small></h3>
             <SegmentedControl
               aria-label="视频消息节奏"
               value={settings.pace}
               onValueChange={value => onChange({ pace: value as PlaybackPace })}
               options={playbackPaces.map(item => ({ value: item, label: playbackPaceLabels[item] }))}
             />
+            {batch && <p className="video-option-note">节奏对整批所有组生效，改一次就够了。</p>}
           </div>}
 
         {scrolling && <div className="video-option">
@@ -166,7 +183,7 @@ export function VideoExportDialog({
         </div>}
 
         {!scrolling && <div className="video-option">
-          <h3>提示音 <small>{messageCount ? `共 ${soundCount} 声` : '暂无消息'}</small></h3>
+          <h3>提示音 <small>{messageCount ? `${batch ? '本批共 ' : '共 '}${soundCount} 声` : '暂无消息'}</small></h3>
           <div className="video-sound-row">
             <Switch aria-label="视频带提示音" checked={settings.soundEnabled} onCheckedChange={checked => onChange({ soundEnabled: checked })} />
             <span className="video-option-note">打开后按下面两项分别选择</span>
@@ -224,14 +241,17 @@ export function VideoExportDialog({
 
         <p className="video-summary">
           <b>预计约 {Math.max(1, Math.round(estimatedMs / 1000))} 秒</b>完成：{scrolling ? '先把整段对话合成为一张长图，再按设定的时长实时录制' : '先逐条渲染画面，再实时录制'}，两段耗时相加。<br />
-          录制期间请保持当前标签页在前台，切到后台会中断。生成视频会使用 <b>1 次</b>导出额度。
+          录制期间请保持当前标签页在前台，切到后台会中断。
+          {batch
+            ? <> 每组视频使用 <b>1 次</b>导出额度，本批共 <b>{groupCount} 次</b>。</>
+            : <> 生成视频会使用 <b>1 次</b>导出额度。</>}
         </p>
 
         {!supported && <p className="video-option-note" role="alert" style={{ color: '#a4382c' }}><AlertTriangle size={12} /> 当前浏览器不支持在本地生成视频，请改用 Chrome 或 Edge 打开本站。</p>}
 
         <div className="video-dialog-actions">
           <Dialog.Close render={<Button variant="outline" />}>取消</Dialog.Close>
-          <Button type="button" disabled={!supported || !messageCount || !customReady} onClick={onConfirm}><Download size={15} /> 开始生成视频</Button>
+          <Button type="button" disabled={!supported || !messageCount || !customReady} onClick={onConfirm}>{batch ? <Check size={15} /> : <Download size={15} />} {batch ? '完成' : '开始生成视频'}</Button>
         </div>
       </Dialog.Popup>
     </Dialog.Portal>
@@ -270,17 +290,20 @@ interface VideoProgressOverlayProps {
    * 这时候沿用逐帧的文案会让人以为卡住了。
    */
   renderHint?: string
+  /** 批量导出时的「第几组 / 共几组 · 标题」；批量那一次录制要让人知道进度走到哪了。 */
+  jobLabel?: string
   onCancel: () => void
 }
 
 /** 渲染与录制合成一条进度条，避免用户以为卡住。 */
-export function VideoProgressOverlay({ stage, current, total, elapsedMs, totalMs, renderHint, onCancel }: VideoProgressOverlayProps) {
+export function VideoProgressOverlay({ stage, current, total, elapsedMs, totalMs, renderHint, jobLabel, onCancel }: VideoProgressOverlayProps) {
   const renderRatio = total ? Math.min(1, current / total) : 1
   const recordRatio = totalMs ? Math.min(1, elapsedMs / totalMs) : 1
   const percent = stage === 'render' ? renderRatio * 45 : 45 + recordRatio * 55
   const seconds = (value: number) => Math.max(0, Math.round(value / 1000))
   return <div className="video-progress-backdrop" role="dialog" aria-modal="true" aria-label="正在生成视频">
     <div className="video-progress-panel">
+      {jobLabel && <p className="video-progress-scope">{jobLabel}</p>}
       <p className="video-progress-title">
         {stage === 'render' ? <><Video size={16} /> 正在渲染画面</> : <><Timer size={16} /> 正在录制视频</>}
       </p>
@@ -288,7 +311,7 @@ export function VideoProgressOverlay({ stage, current, total, elapsedMs, totalMs
       <p className="video-progress-text">
         {stage === 'render'
           ? renderHint ?? `第 ${Math.min(current, total)} / ${total} 帧，正在逐条生成对话画面…`
-          : `已录制 ${seconds(elapsedMs)} / ${seconds(totalMs)} 秒，请不要切换标签页。`}
+          : `已录制 ${seconds(elapsedMs)} / ${seconds(totalMs)} 秒，请不要切换标签页${jobLabel ? '；这一条录完会立即下载' : ''}。`}
       </p>
       <div className="video-progress-actions"><Button type="button" variant="outline" onClick={onCancel}>取消生成</Button></div>
     </div>

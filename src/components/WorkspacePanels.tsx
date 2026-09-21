@@ -53,8 +53,19 @@ import {
   resolveFontScale,
   type FontScaleId,
 } from '@/lib/font-size'
+import { videoFrameLabel, videoFrameLayout, videoFrameReady, type VideoFrameOutput } from '@/lib/video-frame'
+import { videoContentScreen } from '@/lib/video-padding'
+import { SidePadOption } from './SidePadOption'
 import { getWorkspacePrefs, patchWorkspacePrefs } from '@/lib/workspace-prefs-store'
 import './Workspace.css'
+
+/** 视频取景框：把预览换成「导出成视频的那一帧」。 */
+export interface WorkspaceVideoFrame {
+  /** 视频画布尺寸，与导出用的那个一致。 */
+  output: VideoFrameOutput
+  /** 画布底色，与录制时填充的是同一个（对话背景色）。 */
+  background: string
+}
 
 interface WorkspacePanelsProps {
   children: ReactNode
@@ -71,6 +82,12 @@ interface WorkspacePanelsProps {
   /** 传了才显示「字体大小」这一段，取值来自 PhoneSettings.fontScale。 */
   fontScale?: number
   onFontScaleChange?: (value: number) => void
+  /** 两侧安全留白的当前值（输出像素，见 lib/video-padding.ts）。 */
+  videoSidePad?: number
+  /** 传了才在尺寸弹层里出现「两侧留白」那一段。 */
+  onVideoSidePadChange?: (value: number) => void
+  /** 给了、并且留白不为 0，预览就换成视频取景框（见 lib/video-frame.ts）。 */
+  videoFrame?: WorkspaceVideoFrame | null
 }
 
 interface SizeChoice {
@@ -97,7 +114,7 @@ function draftText(size: ScreenSize) {
 }
 
 /** Shared editor/preview layout. Only the editor scrolls; export actions stay in reach. */
-export function WorkspacePanels({ children, preview, previewActions, previewTitle = '实时预览', previewDescription = '画面随编辑更新，导出保留原始清晰度', screen, onScreenChange, imageMax, onImageMaxChange, fontScale, onFontScaleChange }: WorkspacePanelsProps) {
+export function WorkspacePanels({ children, preview, previewActions, previewTitle = '实时预览', previewDescription = '画面随编辑更新，导出保留原始清晰度', screen, onScreenChange, imageMax, onImageMaxChange, fontScale, onFontScaleChange, videoSidePad, onVideoSidePadChange, videoFrame }: WorkspacePanelsProps) {
   const screenSize = screen ?? defaultScreenSize
   const screenLabel = screenSizeLabel(screenSize)
   const aspect = phoneAspect(screenSize)
@@ -128,21 +145,40 @@ export function WorkspacePanels({ children, preview, previewActions, previewTitl
   const [focus, setFocus] = useState(false)
   const bodyRef = useRef<HTMLDivElement>(null)
 
-  const phoneWidth = resolvePhoneWidth(sizeMode, customWidth, autoWidth)
-  const phoneHeight = phoneDisplayHeight(phoneWidth, screenSize)
+  // 「窗口大小」这个档位管的是画面占多宽的槽位。开着取景框时，这个槽位给的是取景框
+  // （= 视频画布）的宽度：手机在画布里占多大由导出比例决定，不再是这个数。
+  const slotWidth = resolvePhoneWidth(sizeMode, customWidth, autoWidth)
+  const frame = videoFrame && (videoSidePad ?? 0) > 0
+    ? videoFrameLayout(slotWidth, videoFrame.output, screenSize, videoSidePad)
+    : null
+  const frameLayout = frame && videoFrameReady(frame) ? frame : null
+  const phoneWidth = frameLayout ? frameLayout.phoneWidth : slotWidth
+  // 取景框开着时，手机的画面比例要换成成片那一份（铺满上下、只左右留白），否则它会按原始
+  // 屏幕比例渲染——比框矮一截，上下各空一块，看着就成了「四周留白」。父级渲染 PhonePreview
+  // 时传的是同一个值（见 App.tsx 的 videoScreen、BatchStudio 的 videoScreen），两边必须一致。
+  const frameScreen = frameLayout && videoFrame
+    ? videoContentScreen(screenSize, { width: videoFrame.output.width, height: videoFrame.output.height }, videoSidePad)
+    : screenSize
+  // 高度一律从宽度换算（见 phoneDisplayHeight）：容器高度与缩放后的画面高度必须来自
+  // 同一个数，否则取景框里会露出一条 1px 的缝。
+  const phoneHeight = phoneDisplayHeight(phoneWidth, frameScreen)
   const sizeChoice = sizeChoices.find(choice => choice.id === sizeMode) ?? sizeChoices[0]
   const screenChoice = screenSizePreset(screenMode)
   const imageChoice = imageSizePreset(imageMode)
   const fontChoice = fontScalePreset(fontMode)
+  // 自适应宽度按「实际要放进去的那个框」算比例：开着取景框时框是视频画布，它比手机宽，
+  // 拿手机比例去算会让取景框顶到面板两边。宽度上限一并放宽——多出来的宽度全给取景框，
+  // 手机在里面的相对大小不变，但整体更接近成片的观感。
+  const layoutAspect = frameLayout ? frameLayout.canvasHeight / frameLayout.canvasWidth : aspect
+  const layoutLimit = focus ? 620 : frameLayout ? 380 : 340
 
   useEffect(() => {
     const node = bodyRef.current
     if (!node) return
-    const limit = focus ? 620 : 340
     const apply = (width: number, height: number) => {
       if (width < 1) return
       // 高度才是竖屏手机的主要约束，宽度上限只兜住极宽的窗口。
-      setAutoWidth(Math.min(limit, width, Math.max(160, height / aspect)))
+      setAutoWidth(Math.min(layoutLimit, width, Math.max(160, height / layoutAspect)))
     }
     const observer = new ResizeObserver(([entry]) => apply(entry.contentRect.width, entry.contentRect.height))
     observer.observe(node)
@@ -151,7 +187,7 @@ export function WorkspacePanels({ children, preview, previewActions, previewTitl
     const horizontalPadding = parseFloat(style.paddingLeft) + parseFloat(style.paddingRight)
     apply(node.clientWidth - horizontalPadding, node.clientHeight - horizontalPadding)
     return () => observer.disconnect()
-  }, [focus, aspect])
+  }, [layoutAspect, layoutLimit])
 
   /** 记住窗口宽度的档位与自定义值（只改 display 那一半，其余偏好不动）。 */
   const rememberDisplay = (next: { phoneSize?: PhoneSizeId; customPhoneWidth?: number }) => {
@@ -162,7 +198,7 @@ export function WorkspacePanels({ children, preview, previewActions, previewTitl
     setSizeMode(id)
     // 从别的档位切过来时，先把草稿对齐到当前实际宽度，免得输入框里是上一次的旧值。
     if (id === 'custom') {
-      const next = clampPhoneWidth(phoneWidth)
+      const next = clampPhoneWidth(slotWidth)
       setCustomWidth(next)
       setCustomDraft(String(next))
       rememberDisplay({ phoneSize: id, customPhoneWidth: next })
@@ -246,10 +282,11 @@ export function WorkspacePanels({ children, preview, previewActions, previewTitl
   }
 
   const sizeTriggerLabel = [
-    `聊天窗口大小：${sizeChoice.label} ${phoneWidth}px`,
+    `${frameLayout ? '取景框宽度' : '聊天窗口大小'}：${sizeChoice.label} ${slotWidth}px`,
     screen ? `屏幕 ${screenLabel}` : '',
     imageMax === undefined ? '' : `图片 ${imageSizeLabel(imageMode, imageMaxValue)}`,
     fontScale === undefined ? '' : `字体 ${fontScaleLabel(fontMode, fontScaleValue)}`,
+    videoSidePad === undefined ? '' : `两侧留白 ${videoSidePad}px`,
   ].filter(Boolean).join('；')
 
   return <div className="workspace-panels" data-mobile-view={view} data-focus={focus}>
@@ -257,13 +294,15 @@ export function WorkspacePanels({ children, preview, previewActions, previewTitl
     <section className="workspace-editor-scroll" aria-label="内容编辑区" tabIndex={0}>{children}</section>
     <aside className="workspace-preview" aria-label="固定预览区">
       <header className="workspace-preview-header"><div><Smartphone size={16} /><h2>{previewTitle}</h2></div><p>{previewDescription}</p>
+        {/* 取景框开着的时候，预览看到的不是手机本身而是导出成视频的那一帧，这里说清楚。 */}
+        {frameLayout && videoFrame && <p className="workspace-preview-frame">{videoFrameLabel(videoFrame.output, videoSidePad ?? 0)} · 手机铺满上下，两侧那两条就是被平台裁掉或浮层压住的部分；图片与长截图会照同样的像素加在左右两头。</p>}
         <div className="workspace-preview-tools">
           <Popover.Root modal={false}>
             <Popover.Trigger render={<Button variant="ghost" size="icon" type="button" className="workspace-size-toggle" aria-label={sizeTriggerLabel} title={sizeTriggerLabel} />}><Smartphone size={14} /></Popover.Trigger>
             <Popover.Portal>
               <Popover.Positioner sideOffset={6} align="end" className="workspace-size-positioner">
-                <Popover.Popup className="workspace-size-popup" aria-label={screen ? '聊天窗口、屏幕、图片与字体大小' : '聊天窗口大小'}>
-                  <div className="workspace-size-head"><span>预览显示</span><small>当前 {phoneWidth}px</small></div>
+                <Popover.Popup className="workspace-size-popup" aria-label={`聊天窗口${screen ? '、屏幕' : ''}${imageMax === undefined ? '' : '、图片'}${fontScale === undefined ? '' : '、字体'}${onVideoSidePadChange === undefined ? '' : '、两侧留白'}的大小设置`}>
+                  <div className="workspace-size-head"><span>{frameLayout ? '取景框宽度' : '预览显示'}</span><small>当前 {slotWidth}px</small></div>
                   <div className="workspace-size-list" role="radiogroup" aria-label="窗口大小档位">
                     {sizeChoices.map(choice => <button
                       key={choice.id}
@@ -296,7 +335,9 @@ export function WorkspacePanels({ children, preview, previewActions, previewTitl
                   </div>}
                   <p className="workspace-size-note">{sizeChoice.note}</p>
                   <p className="workspace-size-note">
-                    {screen ? '只影响这里的显示大小，导出分辨率看下面的屏幕尺寸。' : '只影响这里的显示大小，导出的图片尺寸不变。'}
+                    {frameLayout
+                      ? '取景框开着的时候，这里调的是取景框（视频画布）的宽度；手机在画布里占多大由导出比例决定。图片导出不受影响。'
+                      : screen ? '只影响这里的显示大小，导出分辨率看下面的屏幕尺寸。' : '只影响这里的显示大小，导出的图片尺寸不变。'}
                   </p>
                   {screen && <div className="workspace-size-section">
                     <div className="workspace-size-head"><span>屏幕尺寸</span><small>导出 {screenLabel}</small></div>
@@ -434,7 +475,11 @@ export function WorkspacePanels({ children, preview, previewActions, previewTitl
                     <p className="workspace-size-note">{fontChoice ? fontChoice.note : fontCustomNote}</p>
                     <p className="workspace-size-note">字号、行高、气泡留白与头像会一起缩放，一屏能放下的消息条数跟着变；预览与导出用的是同一个值。</p>
                   </div>}
-                  <p className="workspace-size-note">这一段里的四项（窗口大小、屏幕尺寸、图片大小、字号）都会被记住：刷新页面、新建空白对话、导入新的聊天内容都继续沿用，不会回到默认值。</p>
+                  {/* 留白放在预览这边调：弹层不挡画面，调多少预览里的取景框就变多少。 */}
+                  {onVideoSidePadChange !== undefined && <div className="workspace-size-section">
+                    <SidePadOption variant="popover" value={videoSidePad ?? 0} onChange={onVideoSidePadChange} />
+                  </div>}
+                  <p className="workspace-size-note">这一段里的几项（窗口大小、屏幕尺寸、图片大小、字号、两侧留白）都会被记住：刷新页面、新建空白对话、导入新的聊天内容都继续沿用，不会回到默认值。</p>
                 </Popover.Popup>
               </Popover.Positioner>
             </Popover.Portal>
@@ -442,7 +487,12 @@ export function WorkspacePanels({ children, preview, previewActions, previewTitl
           <Button variant="ghost" size="icon" type="button" className="workspace-focus-toggle" aria-pressed={focus} aria-label={focus ? '退出专注模式' : '专注模式（隐藏编辑区，放大预览）'} title={focus ? '退出专注模式' : '专注模式：隐藏编辑区，放大预览'} onClick={() => setFocus(value => !value)}>{focus ? <Minimize2 size={15} /> : <Maximize2 size={15} />}</Button>
         </div>
       </header>
-      <div className="workspace-preview-body" ref={bodyRef} style={{ '--workspace-phone-width': `${phoneWidth}px`, '--workspace-phone-scale': phoneDisplayScale(phoneWidth), '--workspace-phone-height': `${phoneHeight}px` } as CSSProperties}>{preview}</div>
+      <div className="workspace-preview-body" ref={bodyRef} style={{ '--workspace-phone-width': `${phoneWidth}px`, '--workspace-phone-scale': phoneDisplayScale(phoneWidth), '--workspace-phone-height': `${phoneHeight}px` } as CSSProperties}>
+        {/* 取景框：手机按导出比例缩进画布居中，露出来的底色就是成片里那两条边带。 */}
+        {frameLayout && videoFrame
+          ? <div className="workspace-video-frame" style={{ width: frameLayout.canvasWidth, height: frameLayout.canvasHeight, background: videoFrame.background }}>{preview}</div>
+          : preview}
+      </div>
       {previewActions && <footer className="workspace-preview-actions">{previewActions}</footer>}
     </aside>
   </div>

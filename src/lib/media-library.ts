@@ -333,6 +333,14 @@ export interface MediaImportSummary {
   rejected: number
 }
 
+/**
+ * 读文件 → 入库之后交还给调用方的东西：摘要 + 与传入文件顺序一致、可以直接用的素材。
+ * 库里已有同一张图时 `picked` 里给的是**库里那条旧记录**，否则选中的会是一条库里不存在的影子。
+ */
+export interface MediaImportOutcome extends MediaImportSummary {
+  picked: MediaAsset[]
+}
+
 /** 批量上传后的一句回执：吞掉任何一项都会让人以为「我明明传了 20 张」。 */
 export function mediaImportSummaryText(summary: MediaImportSummary) {
   const parts: string[] = []

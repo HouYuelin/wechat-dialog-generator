@@ -402,6 +402,16 @@
   line-height: 1.4;
   min-height: calc(80px * var(--wc-font-scale, 1));
 }
+/* 表情：`[呲牙]` 这类标签渲染成的通用 emoji（见 components/EmojiText.tsx）。
+   字号用 em 跟随外层字号，所以「字号」档位一动它也跟着缩。
+   line-height 收紧到 1，1.2em 的行盒仍小于气泡的 1.4 行高——不会把气泡撑高，
+   一条消息里全是表情时行距才和文字一致。 */
+.wc-emoji {
+  font-size: 1.2em;
+  line-height: 1;
+  vertical-align: -0.18em;
+  font-family: 'Apple Color Emoji', 'Segoe UI Emoji', 'Noto Color Emoji', 'Twemoji Mozilla', sans-serif;
+}
 .wc-arrow {
   content: '';
   background: #fff;

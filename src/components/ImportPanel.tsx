@@ -3,6 +3,7 @@ import { Textarea } from './ui/textarea';
 import { Disclosure } from './ui/controls';
 import { useRef, useState } from 'react';
 import { FileUp, FileText, Trash2, Copy, Check, Sparkles } from 'lucide-react';
+import { EmojiPicker } from './EmojiPicker';
 import { EXAMPLE_TEXT } from '@/lib/parser';
 
 const DOUBAO_PROMPT = `请帮我生成一段微信群聊天记录，要求如下：
@@ -39,6 +40,8 @@ interface ImportPanelProps {
 
 export function ImportPanel({ text, onTextChange, onImport }: ImportPanelProps) {
   const fileInputRef = useRef<HTMLInputElement>(null);
+  // 表情面板插标签要按光标位置，所以直接拿着这个输入框。
+  const textareaRef = useRef<HTMLTextAreaElement>(null);
   const [copied, setCopied] = useState(false);
 
   const handleCopyPrompt = async () => {
@@ -72,7 +75,8 @@ export function ImportPanel({ text, onTextChange, onImport }: ImportPanelProps) 
           红包消息：<code>**用户名**：[红包]备注</code><br />
           转账消息：<code>**用户名**：[转账]金额:备注</code><br />
           语音消息：<code>**用户名**：[语音]秒数</code>，转文字：<code>**用户名**：[语音]秒数:内容</code><br />
-          时间节点：<code>**【3月1日 14:32】**</code>
+          时间节点：<code>**【3月1日 14:32】**</code><br />
+          表情：正文里写 <code>[呲牙]</code> 就会显示成对应表情（也可用输入框下方的表情面板插入）
           <div className="tip-muted">标题行(#)、引用行(&gt;)、空行自动跳过。第一个出现的用户默认为"自己"。图片不带URL时可在预览中点击上传本地图片。</div>
           </div>
         </Disclosure>
@@ -100,11 +104,13 @@ export function ImportPanel({ text, onTextChange, onImport }: ImportPanelProps) 
 
         <Textarea
           className="s-textarea"
+          ref={textareaRef}
           aria-label="聊天记录文本"
           value={text}
           onChange={(e) => onTextChange(e.target.value)}
           placeholder="在此粘贴聊天记录文本，或点击上方按钮导入文件..."
         />
+        <EmojiPicker target={textareaRef} onInsert={onTextChange} />
 
         <small className="form-help">下方「添加消息」新增的消息会按同样的格式追加到这段文本末尾，可以在这里继续改写；改完点「解析并导入」即按文本重建整份对话。图片消息只写 [图片] 标记，重新解析后可以点图片从素材库再选一张。</small>
 

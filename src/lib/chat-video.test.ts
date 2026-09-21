@@ -44,6 +44,41 @@ test('invalid dimensions degrade to an empty rect instead of NaN', () => {
   assert.deepEqual(fitRect(-10, 2436, 1080, 1920), empty)
 })
 
+test('a side padding guarantee squeezes the frame inward, keeping the ratio', () => {
+  const rect = fitRect(1125, 2436, 1080, 1920, 120)
+  assert.equal(rect.width, 840)
+  // 两侧各留出的空白正好是设定的像素值。
+  assert.equal(rect.x, 120)
+  assert.equal(1080 - rect.x - rect.width, 120)
+  assert.equal(rect.height, 1819)
+  assert.equal(rect.y, 51)
+  // 仍然不裁切、不变形。
+  assert.ok(rect.width / rect.height < 1125 / 2436 + 0.002 && rect.width / rect.height > 1125 / 2436 - 0.002)
+  assert.ok(rect.x + rect.width <= 1080 && rect.width <= 1080 - 120 * 2)
+})
+
+test('留白是「至少 N」：比画布本来就会留的边还小时不生效', () => {
+  // 9:16 画布下手机画面本来就左右各留 97px，调到它以下不会把画面再放大回去。
+  assert.deepEqual(fitRect(1125, 2436, 1080, 1920, 50), fitRect(1125, 2436, 1080, 1920))
+  assert.deepEqual(fitRect(1125, 2436, 1080, 1920, 0), fitRect(1125, 2436, 1080, 1920))
+  // 非法留白当作 0 处理，不能因此算出 NaN 或负尺寸。
+  assert.deepEqual(fitRect(1125, 2436, 1080, 1920, Number.NaN), fitRect(1125, 2436, 1080, 1920))
+  assert.deepEqual(fitRect(1125, 2436, 1080, 1920, -200), fitRect(1125, 2436, 1080, 1920))
+})
+
+test('满屏画布加留白后仍然是一份合法矩形', () => {
+  // 1125×2436 的画布本来就与手机同比例，只有留白这一条会改变画面大小。
+  const rect = fitRect(1125, 2436, 1125, 2436, 120)
+  assert.equal(rect.width, 885)
+  assert.equal(rect.x, 120)
+  assert.equal(1125 - rect.x - rect.width, 120)
+  assert.ok(rect.height > 0 && rect.height < 2436)
+  // 留白大到夸张时也不会把画面压成 0。
+  const extreme = fitRect(1125, 2436, 1080, 1920, 99_999)
+  assert.ok(extreme.width > 0 && extreme.height > 0)
+  assert.ok(Number.isFinite(extreme.x) && Number.isFinite(extreme.y))
+})
+
 test('mp4 is preferred and webm is the fallback', () => {
   assert.equal(pickVideoMimeType(() => true), videoMimeCandidates[0])
   assert.ok(pickVideoMimeType(() => true).includes('mp4'))

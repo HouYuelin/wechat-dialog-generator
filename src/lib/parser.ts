@@ -271,7 +271,7 @@ export function appendMessageToRecord(text: string, msg: Omit<ChatMessage, 'id'>
 
 export const EXAMPLE_TEXT = `**【3月1日 14:32】**
 
-**张三**：你好，在忙不？有个事想请你帮个忙
+**张三**：你好，在忙不？有个事想请你帮个忙[微笑]
 
 **李四**：不忙，怎么了？
 
@@ -285,8 +285,8 @@ export const EXAMPLE_TEXT = `**【3月1日 14:32】**
 
 **张三**：[图片]https://picsum.photos/400/300
 
-**李四**：收到，我晚上看看
+**李四**：收到，我晚上看看[OK]
 
 **李四**：[红包]辛苦费
 
-**张三**：太感谢了兄弟！`;
+**张三**：太感谢了兄弟！[呲牙][强]`;

@@ -8,6 +8,8 @@ import { WechatPhoneChrome } from '@/components/WechatPhoneChrome'
 import { WorkspacePanels } from './WorkspacePanels'
 import { beginExportLog } from '@/lib/export-log'
 import { ScenePreviewFrame } from './ScenePreviewFrame'
+import { EmojiText } from './EmojiText'
+import { EmojiPicker } from './EmojiPicker'
 import { MediaLibraryStrip } from './MediaLibraryDialog'
 import { NameSuggest } from './NameSuggest'
 import { nameHistoryKey } from '@/lib/name-history'
@@ -55,6 +57,8 @@ export function MomentsEditor({
   const [commentContent, setCommentContent] = useState('')
   const [coverError, setCoverError] = useState('')
   const previewRef = useRef<HTMLDivElement | null>(null)
+  // 表情面板插标签要按光标位置，所以直接拿着正文输入框。
+  const contentRef = useRef<HTMLTextAreaElement>(null)
   const coverInputRef = useRef<HTMLInputElement | null>(null)
 
   useEffect(() => {
@@ -202,13 +206,13 @@ export function MomentsEditor({
             <div className="moment-avatar">{draft.avatar ? <img src={draft.avatar} alt="" /> : draft.author.slice(0, 1) || '我'}</div>
             <div className="moment-main">
               <strong className="moment-author">{draft.author || '未命名用户'}</strong>
-              <p className="moment-copy">{draft.content || '分享此刻的想法…'}</p>
+              <p className="moment-copy">{draft.content ? <EmojiText text={draft.content} /> : '分享此刻的想法…'}</p>
               {draft.images.length > 0 && <div className={`moment-image-grid count-${Math.min(draft.images.length, 9)}`}>{draft.images.map((image, index) => <img src={image} alt="" key={`${image.slice(-24)}-${index}`} />)}</div>}
               {draft.location && <div className="moment-location"><MapPin size={12} /> {draft.location}</div>}
               <div className="moment-meta"><span>{draft.timeLabel || '刚刚'}</span><button type="button">••</button></div>
               {(draft.likes.length > 0 || draft.comments.length > 0) && <div className="moment-social">
                 {draft.likes.length > 0 && <div className="moment-likes"><Heart size={13} fill="currentColor" /> {draft.likes.join('，')}</div>}
-                {draft.comments.map(comment => <div className="moment-comment" key={comment.id}><strong>{comment.author}：</strong>{comment.content}</div>)}
+                {draft.comments.map(comment => <div className="moment-comment" key={comment.id}><strong>{comment.author}：</strong><EmojiText text={comment.content} /></div>)}
               </div>}
               {draft.likes.length === 0 && draft.comments.length === 0 && <div className="moment-empty-actions"><Heart size={14} /><MessageCircle size={14} /></div>}
             </div>
@@ -274,7 +278,8 @@ export function MomentsEditor({
         <TabsContent className="scene-workspace-section" value="content" keepMounted aria-labelledby="moment-content-heading">
           <div className="scene-workspace-section-heading scene-section-description"><h3 id="moment-content-heading">动态内容</h3><p>文字、图片与发布信息</p></div>
           <div className="moments-form">
-          <label>朋友圈内容<Textarea className="me-textarea moments-content-input" value={draft.content} rows={5} maxLength={500} onChange={event => update('content', event.target.value)} /></label>
+          <label>朋友圈内容<Textarea className="me-textarea moments-content-input" ref={contentRef} value={draft.content} rows={5} maxLength={500} onChange={event => update('content', event.target.value)} /></label>
+          <EmojiPicker target={contentRef} onInsert={value => update('content', value)} />
           <div>
             <div className="moments-label-line"><span>图片</span><small>{draft.images.length}/9</small></div>
             <div className="moments-image-editor">

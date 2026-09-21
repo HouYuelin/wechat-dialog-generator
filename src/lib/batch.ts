@@ -2,6 +2,8 @@ import { parseChatRecord } from './parser'
 import { carryOverAvatars, carryOverSelfId } from './user-avatars'
 import type { ChatUser, ChatMessage, PhoneSettings } from '../types'
 export type CaptureMode = 'standard' | 'long'
+/** 一批产出什么：聊天图（打包成一个 ZIP）还是聊天视频（逐条下载，不打包）。 */
+export type BatchOutput = 'image' | 'video'
 export type ChatContent = { title: string; body: string }
 export type ChatSnapshot = { users: ChatUser[]; messages: ChatMessage[]; selfId: number | null; settings: PhoneSettings }
 export const batchLimit = 50
@@ -78,6 +80,11 @@ export function cardFilename(index: number, title: string) {
   return `${String(index + 1).padStart(3, '0')}_${title.replace(/[<>:"/\\|?*\u0000-\u001f]/g, '_').trim().slice(0, 40) || '卡片'}.png`
 }
 
+/** 视频文件名：和图片共用同一套清洗与编号规则，只换扩展名。 */
+export function videoFilename(index: number, title: string, extension: string) {
+  return cardFilename(index, title).replace(/\.png$/i, `.${extension}`)
+}
+
 // Uncompressed ZIP: PNG is already compressed. Keep dependencies and peak memory small.
 export function zipImages(files: { name: string; bytes: Uint8Array }[]) {
   const encoder = new TextEncoder()
@@ -114,27 +121,44 @@ function crc32(bytes: Uint8Array) {
   return (crc ^ 0xffffffff) >>> 0
 }
 
-export type BatchJob = { id: string; content: ChatContent; mode: CaptureMode; snapshot?: ChatSnapshot; selected: boolean; state: 'ready' | 'working' | 'done' | 'error'; locked?: boolean; dirty?: boolean; error?: string; bytes?: Uint8Array }
-// A failed/ambiguous debit keeps the same id for retry; rendered successes stay cached.
-export async function runBatch(jobs: BatchJob[], deps: {
-  render: (job: BatchJob) => Promise<Uint8Array>
+/** 一条视频的交付记录：成片已经交给浏览器下载，本页只留文件名与体积，不驻留数据。 */
+export type BatchVideoRecord = { name: string; bytes: number }
+
+export type BatchJob = { id: string; content: ChatContent; mode: CaptureMode; snapshot?: ChatSnapshot; selected: boolean; state: 'ready' | 'working' | 'done' | 'error'; locked?: boolean; dirty?: boolean; error?: string; bytes?: Uint8Array; video?: BatchVideoRecord }
+
+/**
+ * 批量导出的调度骨架，图片与视频共用同一条。
+ *
+ * 图片模式：render 截一张图，debit 扣次，字节留在 job.bytes 里，最后一次性打包成 ZIP。
+ * 视频模式：render 把画面准备好（逐条是一叠帧，滚动是一张长图），扣次之后由 deliver 录制并
+ * **立刻下载**。几十条视频不可能塞进一个内存 ZIP，所以成片不进 job.bytes，也就没有「重新下载」。
+ *
+ * 扣次失败（额度结果不明）时保持 job.locked 并停止队列，避免继续发起可能再次扣费的请求；
+ * 已扣次但交付失败的那一条会留在队列里，原编号重试不会重复扣费。
+ */
+export async function runBatch<T = Uint8Array>(jobs: BatchJob[], deps: {
+  render: (job: BatchJob) => Promise<T>
+  /** 交付阶段（扣次之后）：不传就按图片处理，把 render 的结果存进 job.bytes 等打包。 */
+  deliver?: (job: BatchJob, payload: T) => Promise<void>
   debit: (id: string) => Promise<void>
   cancelled: () => boolean
   update: () => void
-  complete: (id: string) => void
+  complete: (job: BatchJob) => void
   result?: (job: BatchJob) => void
 }) {
   for (const job of jobs.filter(j => j.selected && j.state !== 'done')) {
     if (deps.cancelled()) break
     job.state = 'working'; job.error = undefined; deps.update()
     try {
-      const bytes = await deps.render(job)
+      const payload = await deps.render(job)
       if (deps.cancelled()) { job.state = 'ready'; deps.update(); break }
       job.locked = true
       await deps.debit(job.id)
-      job.bytes = bytes; job.state = 'done'; deps.update()
+      if (deps.deliver) await deps.deliver(job, payload)
+      else if (payload instanceof Uint8Array) job.bytes = payload
+      job.state = 'done'; deps.update()
       // Reward confirmation/telemetry must not turn a charged, cached image into a retry.
-      try { deps.complete(job.id) } catch { /* Image remains available for download. */ }
+      try { deps.complete(job) } catch { /* Image remains available for download. */ }
     } catch (error) {
       job.state = 'error'; job.error = error instanceof Error ? error.message : '生成失败，请重试'; deps.update()
       // On debit uncertainty, stop the queue rather than issuing more potentially charged requests.

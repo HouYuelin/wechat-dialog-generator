@@ -4,6 +4,7 @@ import { PlusCircle, Type, Image, Gift, Banknote, Mic, Clock, X } from 'lucide-r
 import type { ChatUser, ChatMessage, MessageType } from '@/types';
 import { imageMessageKinds, type MediaAsset, type MediaKind } from '@/lib/media-library';
 import { MediaLibraryStrip } from './MediaLibraryDialog';
+import { EmojiPicker } from './EmojiPicker';
 import { Input } from './ui/input';
 import { Textarea } from './ui/textarea';
 import { SelectField } from './ui/select';
@@ -50,6 +51,9 @@ export function MessageEditor({ users, selfId, onAddMessage, imagePreview, onIma
   const [voiceTranscript, setVoiceTranscript] = useState('');
   const [timeContent, setTimeContent] = useState('');
   const imgRef = useRef<HTMLInputElement>(null);
+  // 表情面板要把标签插到光标处，所以得直接拿到这两个输入框。
+  const textRef = useRef<HTMLTextAreaElement>(null);
+  const remarkRef = useRef<HTMLInputElement>(null);
 
   const handleImageChange = (e: React.ChangeEvent<HTMLInputElement>) => {
     const file = e.target.files?.[0];
@@ -151,13 +155,17 @@ export function MessageEditor({ users, selfId, onAddMessage, imagePreview, onIma
         />
 
         {msgType === 'text' && (
-          <Textarea
-            className="me-textarea"
-            placeholder="输入消息内容..."
-            value={textContent}
-            onChange={e => setTextContent(e.target.value)}
-            rows={2}
-          />
+          <>
+            <Textarea
+              className="me-textarea"
+              ref={textRef}
+              placeholder="输入消息内容...（写 [呲牙] 会自动变成表情）"
+              value={textContent}
+              onChange={e => setTextContent(e.target.value)}
+              rows={2}
+            />
+            <EmojiPicker target={textRef} onInsert={setTextContent} />
+          </>
         )}
 
         {msgType === 'image' && (
@@ -201,24 +209,29 @@ export function MessageEditor({ users, selfId, onAddMessage, imagePreview, onIma
         )}
 
         {msgType === 'transfer' && (
-          <div className="me-row">
-            <Input
-              className="me-input"
-              type="text"
-              placeholder="金额"
-              value={amount}
-              onChange={e => setAmount(e.target.value)}
-              style={{ flex: 1 }}
-            />
-            <Input
-              className="me-input"
-              type="text"
-              placeholder="备注（默认：转账）"
-              value={remark}
-              onChange={e => setRemark(e.target.value)}
-              style={{ flex: 2 }}
-            />
-          </div>
+          <>
+            <div className="me-row">
+              <Input
+                className="me-input"
+                type="text"
+                placeholder="金额"
+                value={amount}
+                onChange={e => setAmount(e.target.value)}
+                style={{ flex: 1 }}
+              />
+              <Input
+                className="me-input"
+                ref={remarkRef}
+                type="text"
+                placeholder="备注（默认：转账）"
+                value={remark}
+                onChange={e => setRemark(e.target.value)}
+                style={{ flex: 2 }}
+              />
+            </div>
+            {/* 转账备注在微信里可以带表情（红包备注不行），所以只在这里给入口。 */}
+            <EmojiPicker target={remarkRef} onInsert={setRemark} />
+          </>
         )}
 
         {msgType === 'voice' && (

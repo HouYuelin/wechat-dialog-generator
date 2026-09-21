@@ -20,12 +20,14 @@
  * 这个文件只有纯逻辑（默认值、清洗、互转、比较），落盘见 workspace-prefs-store.ts。
  */
 import type { PhoneSettings } from '@/types'
+import type { BatchOutput } from './batch'
 import { defaultFontScale, normalizeFontScale } from './font-size'
 import { defaultImageMax, normalizeImageMax } from './image-size'
 import { clampPhoneWidth, clampScreenSize, defaultScreenSize, phoneSizeIdLabels, type PhoneSizeId, type ScreenSize } from './phone-size'
 import { playbackPaces, type PlaybackPace } from './chat-playback'
 import { videoSizeOptionsFor, type VideoSizeId } from './chat-video'
 import { clampScrollDurationSeconds, defaultScrollDurationSeconds } from './chat-scroll-video'
+import { clampVideoSidePad, defaultVideoSidePad } from './video-padding'
 
 /** 自定义音效来自内置合成音，还是用户自己选的音频。 */
 export type SoundSource = 'synth' | 'custom'
@@ -54,6 +56,10 @@ export interface PlaybackPrefs {
   videoMode: PrefVideoMode
   /** 滚动模式的时长（秒）。 */
   scrollDuration: number
+  /** 视频两侧的安全留白（输出像素）：发抖音等平台时给裁切与浮层让位，见 video-padding.ts。 */
+  videoSidePad: number
+  /** 批量聊天制作这一批产出什么：聊天图还是聊天视频。 */
+  batchOutput: BatchOutput
 }
 
 /**
@@ -105,6 +111,8 @@ export const defaultPlaybackPrefs: PlaybackPrefs = {
   videoSize: 'vertical',
   videoMode: 'flip',
   scrollDuration: defaultScrollDurationSeconds,
+  videoSidePad: defaultVideoSidePad,
+  batchOutput: 'image',
 }
 
 export const defaultDisplayPrefs: DisplayPrefs = {
@@ -221,6 +229,11 @@ function normalizePlaybackPrefs(raw: unknown): PlaybackPrefs {
     scrollDuration: source.scrollDuration === undefined
       ? defaultScrollDurationSeconds
       : clampScrollDurationSeconds(Number(source.scrollDuration)),
+    // 旧偏好没有这一项：缺字段时给默认值（开着安全区），而不是当成 0 把安全区关掉。
+    videoSidePad: source.videoSidePad === undefined
+      ? defaultVideoSidePad
+      : clampVideoSidePad(Number(source.videoSidePad)),
+    batchOutput: oneOf(source.batchOutput, ['image', 'video'] as const, defaultPlaybackPrefs.batchOutput),
   }
 }
 
@@ -261,7 +274,7 @@ function canonical(prefs: WorkspacePrefs) {
     playback.pace, playback.soundEnabled, playback.soundReceive, playback.soundSend,
     playback.soundSource, playback.soundIds.received, playback.soundIds.sent,
     playback.screenSize.width, playback.screenSize.height,
-    playback.videoSize, playback.videoMode, playback.scrollDuration,
+    playback.videoSize, playback.videoMode, playback.scrollDuration, playback.videoSidePad, playback.batchOutput,
     display.phoneSize, display.customPhoneWidth,
   ])
 }

@@ -5,6 +5,7 @@ import { defaultScreenSize, designHeightFor, type ScreenSize } from '@/lib/phone
 import { normalizeImageMax } from '@/lib/image-size';
 import { bubbleMaxWidth, fontScaleRatio, normalizeFontScale } from '@/lib/font-size';
 import { WechatPhoneHeader } from '@/components/WechatPhoneHeader';
+import { EmojiText } from '@/components/EmojiText';
 import './PhonePreview.css';
 
 interface PhonePreviewProps {
@@ -84,7 +85,7 @@ function ChatBubble({ msg, user, userIndex, isSelf, isGroup, selfColor, otherCol
         return (
           <div className="wc-bubble" style={{ background: bubbleColor }}>
             <span className="wc-arrow" style={{ background: bubbleColor }} />
-            <span dangerouslySetInnerHTML={{ __html: escHtml(msg.content).replace(/\n/g, '<br>') }} />
+            <EmojiText text={msg.content} />
           </div>
         );
       case 'image': {
@@ -130,6 +131,7 @@ function ChatBubble({ msg, user, userIndex, isSelf, isGroup, selfColor, otherCol
             <div className="wc-rp-content">
               <div className="wc-rp-icon wc-rp-icon-redpacket"><img src={`${import.meta.env.BASE_URL}wechat-trans-icon3.png`} alt="" /></div>
               <div className="wc-rp-info">
+                {/* 红包备注刻意不认表情标签：微信的红包留言本身就不支持表情，这里跟着它保持一致。 */}
                 <span>{escHtml(msg.params.remark || '恭喜发财，大吉大利')}</span>
               </div>
             </div>
@@ -144,7 +146,8 @@ function ChatBubble({ msg, user, userIndex, isSelf, isGroup, selfColor, otherCol
               <div className="wc-rp-icon"><img src={`${import.meta.env.BASE_URL}wechat-trans-icon1.png`} alt="" /></div>
               <div className="wc-rp-info">
                 <span>¥{parseFloat(msg.params.amount || '0').toFixed(2)}</span>
-                <small>{escHtml(msg.params.remark || '转账')}</small>
+                {/* 转账备注在微信里是可以带表情的，所以这里认标签。 */}
+                <small><EmojiText text={msg.params.remark || '转账'} /></small>
               </div>
             </div>
             <div className="wc-rp-bottom"><span>微信转账</span></div>
