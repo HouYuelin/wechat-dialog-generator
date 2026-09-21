@@ -127,7 +127,8 @@ export function BatchStudio({
   const videoPlan = video ? batchVideoPlan({
     mode: video.settings.mode,
     sizeId: video.settings.size,
-    pace: video.settings.pace,
+    // 批量整批共用一份设置，只取统一间隔；逐条间隔按「第几条」排，套到别的组上不成立。
+    paceMs: video.settings.pace.paceMs,
     soundEnabled: video.settings.soundEnabled,
     soundReceive: video.settings.soundReceive,
     soundSend: video.settings.soundSend,

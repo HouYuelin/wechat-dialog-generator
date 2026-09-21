@@ -2,13 +2,10 @@ import { useRef, type ReactNode } from 'react'
 import { Dialog } from '@base-ui/react/dialog'
 import { Button } from './ui/button'
 import { SegmentedControl, Slider, Switch } from './ui/controls'
+import { PaceOption } from './PaceOption'
 import { SidePadOption } from './SidePadOption'
 import { AlertTriangle, Check, Download, FolderOpen, Music, Timer, Video, X } from 'lucide-react'
-import {
-  playbackPaceLabels,
-  playbackPaces,
-  type PlaybackPace,
-} from '@/lib/chat-playback'
+import type { PaceSetting } from '@/lib/chat-playback'
 import { videoSizeOptionsFor, type VideoSizeId } from '@/lib/chat-video'
 import {
   clampScrollDurationSeconds,
@@ -37,7 +34,8 @@ const videoCaptureModeLabels: Record<VideoCaptureMode, string> = {
 export interface VideoExportSettings {
   mode: VideoCaptureMode
   size: VideoSizeId
-  pace: PlaybackPace
+  /** 消息出现的节奏：统一间隔或逐条设置，见 lib/chat-playback.ts。 */
+  pace: PaceSetting
   /** 滚动模式的视频总时长（秒）。 */
   scrollDurationSeconds: number
   /** 两侧安全留白（输出像素），0 表示不额外留白。见 lib/video-padding.ts。 */
@@ -59,6 +57,8 @@ interface VideoExportDialogProps {
   settings: VideoExportSettings
   onChange: (patch: Partial<VideoExportSettings>) => void
   messageCount: number
+  /** 每条消息的摘要，逐条间隔列表用它标出「在设哪一条前面」（批量页用不到）。 */
+  paceLabels?: readonly string[]
   /** 按当前音效开关算出的发声次数。 */
   soundCount: number
   estimatedMs: number
@@ -90,7 +90,7 @@ interface VideoExportDialogProps {
  * 并且把主按钮改成「完成」——批量那一次导出由队列那边的按钮发起，这里只管设置。
  */
 export function VideoExportDialog({
-  open, onOpenChange, settings, onChange, messageCount, soundCount, estimatedMs, durationLabel, containerLabel,
+  open, onOpenChange, settings, onChange, messageCount, paceLabels, soundCount, estimatedMs, durationLabel, containerLabel,
   screen = defaultScreenSize, supported, soundError, onSoundFile, onOpenSoundLibrary, soundLibraryCount = 0, groupCount, description, onConfirm,
 }: VideoExportDialogProps) {
   const fileRef = useRef<HTMLInputElement>(null)
@@ -168,13 +168,14 @@ export function VideoExportDialog({
           </div>
           : <div className="video-option">
             <h3>消息出现节奏 <small>{scope}{messageCount} 条 · {durationLabel}</small></h3>
-            <SegmentedControl
-              aria-label="视频消息节奏"
-              value={settings.pace}
-              onValueChange={value => onChange({ pace: value as PlaybackPace })}
-              options={playbackPaces.map(item => ({ value: item, label: playbackPaceLabels[item] }))}
+            {/* 逐条间隔按「第几条」排，套到另一段对话上不成立，所以批量页只给统一间隔。 */}
+            <PaceOption
+              setting={settings.pace}
+              messageCount={batch ? 0 : messageCount}
+              labels={batch ? undefined : paceLabels}
+              uniformOnly={batch}
+              onChange={pace => onChange({ pace })}
             />
-            {batch && <p className="video-option-note">节奏对整批所有组生效，改一次就够了。</p>}
           </div>}
 
         {scrolling && <div className="video-option">

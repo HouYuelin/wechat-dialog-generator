@@ -32,9 +32,10 @@ import {
   buildPlaybackTimeline,
   frameIndexAt,
   maxVideoMessages,
+  messageGapLabel,
   notifyEvents,
   playbackDurationLabel,
-  type PlaybackPace,
+  type PaceSetting,
 } from '@/lib/chat-playback';
 import { pickVideoMimeType, videoContainerLabel, videoExportSupported, videoFileExtension, videoSizeOption, type VideoSizeId } from '@/lib/chat-video';
 import { screenSizeLabel, type ScreenSize } from '@/lib/phone-size';
@@ -221,7 +222,8 @@ function App() {
   const [playbackPlaying, setPlaybackPlaying] = useState(false);
   const [revealedCount, setRevealedCount] = useState(0);
   // 播放与导出这一组也全部从偏好取初值：它们原先只活在内存里，刷新一次就回默认。
-  const [playbackPace, setPlaybackPace] = useState<PlaybackPace>(() => getWorkspacePrefs().playback.pace);
+  // 节奏是一整份（统一间隔 + 逐条间隔列表），两份取值都留着，切模式不丢。
+  const [paceSetting, setPaceSetting] = useState<PaceSetting>(() => getWorkspacePrefs().playback.pace);
   const [soundEnabled, setSoundEnabled] = useState(() => getWorkspacePrefs().playback.soundEnabled);
   // 收到与发送是两种不同的音效，各自可选：默认只响「收到」，发送音效按需打开。
   const [soundReceive, setSoundReceive] = useState(() => getWorkspacePrefs().playback.soundReceive);
@@ -358,7 +360,7 @@ function App() {
    */
   useEffect(() => {
     const playback: PlaybackPrefs = {
-      pace: playbackPace,
+      pace: paceSetting,
       soundEnabled,
       soundReceive,
       soundSend,
@@ -378,7 +380,7 @@ function App() {
     };
     // 只写样式与播放导出这一半：预览的窗口宽度是 display 那一半，由尺寸弹层自己写，别在这里覆盖掉。
     patchWorkspacePrefs({ style: stylePrefsFromSettings(settings), playback });
-  }, [customSounds, playbackPace, screenSize, scrollDuration, settings, soundEnabled, soundReceive, soundSend, soundSource, videoMode, videoSize, videoSidePad]);
+  }, [customSounds, paceSetting, screenSize, scrollDuration, settings, soundEnabled, soundReceive, soundSend, soundSource, videoMode, videoSize, videoSidePad]);
 
   /**
    * 记档：只要某位角色身上挂着头像，就把「角色名 + 头像」写进归档。
@@ -1216,9 +1218,21 @@ function App() {
   // ===================== 定时发送播放 =====================
   // 播放与导出视频共用这条时间轴：预览里看到的速度就是导出视频的速度。
   const playbackTimeline = useMemo(
-    () => buildPlaybackTimeline(messages, { pace: playbackPace, selfId, notifyReceived: soundReceive, notifySent: soundSend }),
-    [messages, playbackPace, selfId, soundReceive, soundSend],
+    () => buildPlaybackTimeline(messages, {
+      paceMs: paceSetting.paceMs,
+      paceMode: paceSetting.mode,
+      messageGaps: paceSetting.gaps,
+      selfId,
+      notifyReceived: soundReceive,
+      notifySent: soundSend,
+    }),
+    [messages, paceSetting, selfId, soundReceive, soundSend],
   );
+  // 逐条间隔列表每一行的消息摘要：让人认出「这是在设哪一条前面的等待」。
+  const paceGapLabels = useMemo(() => {
+    const names = new Map(users.map(user => [user.id, user.name]));
+    return messages.map(msg => messageGapLabel(msg, names.get(msg.senderId) ?? null));
+  }, [messages, users]);
   // 整条时间轴上每一次发声的时刻与音效类型，预览播放和视频录制都用这一份。
   const notifyAt = useMemo(
     () => (soundEnabled ? notifyEvents(playbackTimeline) : []),
@@ -1656,7 +1670,7 @@ function App() {
   const videoSettings: VideoExportSettings = {
     mode: videoMode,
     size: videoSize,
-    pace: playbackPace,
+    pace: paceSetting,
     scrollDurationSeconds: scrollDuration,
     sidePad: videoSidePad,
     soundEnabled,
@@ -1671,7 +1685,7 @@ function App() {
   const patchVideoSettings = (patch: Partial<VideoExportSettings>) => {
     if (patch.mode) setVideoMode(patch.mode);
     if (patch.size) setVideoSize(patch.size);
-    if (patch.pace) setPlaybackPace(patch.pace);
+    if (patch.pace) setPaceSetting(patch.pace);
     if (patch.scrollDurationSeconds !== undefined) setScrollDuration(patch.scrollDurationSeconds);
     if (patch.sidePad !== undefined) setVideoSidePad(patch.sidePad);
     if (patch.soundEnabled !== undefined) setSoundEnabled(patch.soundEnabled);
@@ -1742,7 +1756,8 @@ function App() {
                     playing={playbackPlaying}
                     revealed={previewMessages.length}
                     total={messages.length}
-                    pace={playbackPace}
+                    pace={paceSetting}
+                    paceLabels={paceGapLabels}
                     soundEnabled={soundEnabled}
                     soundReceive={soundReceive}
                     soundSend={soundSend}
@@ -1756,7 +1771,7 @@ function App() {
                     onPause={handlePlayPause}
                     onReset={handlePlayReset}
                     onExit={handlePlayExit}
-                    onPaceChange={setPlaybackPace}
+                    onPaceChange={setPaceSetting}
                     onSoundToggle={setSoundEnabled}
                     onSoundReceiveChange={setSoundReceive}
                     onSoundSendChange={setSoundSend}
@@ -1897,6 +1912,7 @@ function App() {
         settings={videoSettings}
         onChange={patchVideoSettings}
         messageCount={messages.length}
+        paceLabels={paceGapLabels}
         soundCount={notifyAt.length}
         // 两种模式的耗时构成完全不同：逐条模式是「每帧渲染 + 按节奏录制」，
         // 滚动模式是一次长图合成 + 按设定时长录制。

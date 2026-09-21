@@ -11,7 +11,7 @@
  * 在批量页改过之后，回聊天页录单个视频也是同一套。
  */
 import type { ChatMessage } from '@/types'
-import { buildPlaybackTimeline, notifyEvents, type NotifyEvent, type PlaybackPace, type PlaybackTimeline } from './chat-playback'
+import { buildPlaybackTimeline, normalizePaceMs, notifyEvents, type NotifyEvent, type PlaybackTimeline } from './chat-playback'
 import { scrollVideoPlan, type ScrollVideoPlan } from './chat-scroll-video'
 import { videoSizeOption, type VideoSizeId, type VideoSizeOption } from './chat-video'
 import { clampVideoSidePad } from './video-padding'
@@ -29,7 +29,14 @@ export interface BatchVideoPlan {
   size: VideoSizeOption
   /** 两侧安全留白（输出像素），整批共用。见 lib/video-padding.ts。 */
   sidePad: number
-  pace: PlaybackPace
+  /**
+   * 逐条播放的间隔（毫秒），整批共用。
+   *
+   * 这里只有**统一间隔**，没有聊天页那套逐条间隔：逐条间隔是按「第几条」排的，
+   * 而每一组是另一段对话、条数也不一样，把它套过来只会让每一组都变得莫名其妙。
+   * 批量页的视频设置弹窗因此只给统一间隔（见 VideoExportDialog 的 groupCount 分支）。
+   */
+  paceMs: number
   soundEnabled: boolean
   soundReceive: boolean
   soundSend: boolean
@@ -40,7 +47,8 @@ export interface BatchVideoPlan {
 export interface BatchVideoChoice {
   mode: PrefVideoMode
   sizeId: VideoSizeId
-  pace: PlaybackPace
+  /** 统一间隔（毫秒）。逐条间隔在批量页不适用，理由见 BatchVideoPlan.paceMs 的注释。 */
+  paceMs: number
   soundEnabled: boolean
   soundReceive: boolean
   soundSend: boolean
@@ -55,7 +63,8 @@ export function batchVideoPlan(choice: BatchVideoChoice, screen: ScreenSize = de
     size: videoSizeOption(choice.sizeId, screen),
     // 与聊天页共用同一份偏好，落到录制前再夹一次，脏值不会把画面挤出画布。
     sidePad: clampVideoSidePad(choice.sidePad),
-    pace: choice.pace,
+    // 与聊天页共用同一份偏好的统一间隔，落到录制前再夹一次，脏值不会把节奏算成负数。
+    paceMs: normalizePaceMs(choice.paceMs),
     soundEnabled: choice.soundEnabled,
     soundReceive: choice.soundReceive,
     soundSend: choice.soundSend,
@@ -97,7 +106,7 @@ export function batchVideoTask(messages: Pick<ChatMessage, 'type' | 'senderId'>[
     }
   }
   const timeline = buildPlaybackTimeline(messages, {
-    pace: plan.pace,
+    paceMs: plan.paceMs,
     selfId,
     notifyReceived: plan.soundEnabled && plan.soundReceive,
     notifySent: plan.soundEnabled && plan.soundSend,

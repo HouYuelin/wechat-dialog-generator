@@ -24,7 +24,7 @@ import type { BatchOutput } from './batch'
 import { defaultFontScale, normalizeFontScale } from './font-size'
 import { defaultImageMax, normalizeImageMax } from './image-size'
 import { clampPhoneWidth, clampScreenSize, defaultScreenSize, phoneSizeIdLabels, type PhoneSizeId, type ScreenSize } from './phone-size'
-import { playbackPaces, type PlaybackPace } from './chat-playback'
+import { defaultPaceSetting, normalizePaceSetting, paceMsFromLegacy, type PaceSetting } from './chat-playback'
 import { videoSizeOptionsFor, type VideoSizeId } from './chat-video'
 import { clampScrollDurationSeconds, defaultScrollDurationSeconds } from './chat-scroll-video'
 import { clampVideoSidePad, defaultVideoSidePad } from './video-padding'
@@ -42,7 +42,8 @@ export type PrefVideoMode = 'flip' | 'scroll'
 export type StylePrefs = Omit<PhoneSettings, 'contactName'>
 
 export interface PlaybackPrefs {
-  pace: PlaybackPace
+  /** 消息出现的节奏：统一间隔一个值，或逐条各设一个。见 lib/chat-playback.ts 的 PaceSetting。 */
+  pace: PaceSetting
   soundEnabled: boolean
   /** 收到 / 发送是两种不同的音效，各自可开关。 */
   soundReceive: boolean
@@ -101,7 +102,7 @@ export const defaultStylePrefs: StylePrefs = {
 }
 
 export const defaultPlaybackPrefs: PlaybackPrefs = {
-  pace: 'normal',
+  pace: defaultPaceSetting(),
   soundEnabled: true,
   soundReceive: true,
   soundSend: false,
@@ -126,7 +127,8 @@ export const defaultPhoneSettings: PhoneSettings = { ...defaultStylePrefs, conta
 export function defaultWorkspacePrefs(): WorkspacePrefs {
   return {
     style: { ...defaultStylePrefs },
-    playback: { ...defaultPlaybackPrefs, soundIds: { received: null, sent: null }, screenSize: { ...defaultScreenSize } },
+    // 嵌套的那几项各给一份新对象：偏好是长期活着的，别让两处共享同一个数组/对象。
+    playback: { ...defaultPlaybackPrefs, pace: defaultPaceSetting(), soundIds: { received: null, sent: null }, screenSize: { ...defaultScreenSize } },
     display: { ...defaultDisplayPrefs },
   }
 }
@@ -213,11 +215,22 @@ function normalizeStylePrefs(raw: unknown): StylePrefs {
   }
 }
 
+/**
+ * 节奏偏好。新格式是 `pace: { mode, paceMs, gaps }`；更早的版本把节奏存成
+ * `pace: 'fast' | 'normal' | 'slow'` 一个字符串，这里折算成毫秒读回来，
+ * 老用户不会因为这次改版被打回默认节奏。
+ */
+function pacePrefs(value: unknown): PaceSetting {
+  const legacy = paceMsFromLegacy(value)
+  if (legacy === null) return normalizePaceSetting(value)
+  return normalizePaceSetting({ ...record(value), paceMs: legacy })
+}
+
 function normalizePlaybackPrefs(raw: unknown): PlaybackPrefs {
   const source = record(raw)
   const ids = record(source.soundIds)
   return {
-    pace: oneOf(source.pace, playbackPaces, defaultPlaybackPrefs.pace),
+    pace: pacePrefs(source.pace),
     soundEnabled: flag(source.soundEnabled, defaultPlaybackPrefs.soundEnabled),
     soundReceive: flag(source.soundReceive, defaultPlaybackPrefs.soundReceive),
     soundSend: flag(source.soundSend, defaultPlaybackPrefs.soundSend),
@@ -271,7 +284,7 @@ function canonical(prefs: WorkspacePrefs) {
     style.wifiEnabled, style.battery, style.unreadCount,
     style.selfBubbleColor, style.otherBubbleColor, style.backgroundColor, style.backgroundImage,
     style.imageMax, style.fontScale,
-    playback.pace, playback.soundEnabled, playback.soundReceive, playback.soundSend,
+    playback.pace.mode, playback.pace.paceMs, playback.pace.gaps.join('|'), playback.soundEnabled, playback.soundReceive, playback.soundSend,
     playback.soundSource, playback.soundIds.received, playback.soundIds.sent,
     playback.screenSize.width, playback.screenSize.height,
     playback.videoSize, playback.videoMode, playback.scrollDuration, playback.videoSidePad, playback.batchOutput,

@@ -1,11 +1,8 @@
 import { Button } from './ui/button'
 import { Disclosure, SegmentedControl, Switch } from './ui/controls'
+import { PaceOption } from './PaceOption'
 import { Eye, Music, Pause, Play, RotateCcw, Timer } from 'lucide-react'
-import {
-  playbackPaceLabels,
-  playbackPaces,
-  type PlaybackPace,
-} from '@/lib/chat-playback'
+import { paceSettingLabel, type PaceSetting } from '@/lib/chat-playback'
 import type { NotifyKind } from '@/lib/notify-sound'
 
 interface ChatPlaybackBarProps {
@@ -14,7 +11,10 @@ interface ChatPlaybackBarProps {
   playing: boolean
   revealed: number
   total: number
-  pace: PlaybackPace
+  /** 消息出现的节奏：统一间隔或逐条设置，见 lib/chat-playback.ts。 */
+  pace: PaceSetting
+  /** 每条消息的摘要，逐条间隔列表用它标出「在设哪一条前面」；长度与消息条数一致。 */
+  paceLabels?: readonly string[]
   /** 提示音总开关。 */
   soundEnabled: boolean
   /** 收到对方消息时是否响一声。 */
@@ -31,7 +31,7 @@ interface ChatPlaybackBarProps {
   onPause: () => void
   onReset: () => void
   onExit: () => void
-  onPaceChange: (pace: PlaybackPace) => void
+  onPaceChange: (pace: PaceSetting) => void
   onSoundToggle: (enabled: boolean) => void
   onSoundReceiveChange: (enabled: boolean) => void
   onSoundSendChange: (enabled: boolean) => void
@@ -54,7 +54,7 @@ function soundSummary(enabled: boolean, receive: boolean, send: boolean) {
  * 避免把预览区的手机画面挤小。
  */
 export function ChatPlaybackBar({
-  active, playing, revealed, total, pace, soundEnabled, soundReceive, soundSend, soundSource, customSoundNames, busy,
+  active, playing, revealed, total, pace, paceLabels, soundEnabled, soundReceive, soundSend, soundSource, customSoundNames, busy,
   onPlay, onPause, onReset, onExit, onPaceChange, onSoundToggle, onSoundReceiveChange, onSoundSendChange, onSoundSourceChange, onPickSound,
 }: ChatPlaybackBarProps) {
   const started = revealed > 0
@@ -74,16 +74,11 @@ export function ChatPlaybackBar({
       <Button type="button" className="btn btn-outline" disabled={!active || busy} aria-label="重播定时发送" onClick={onReset}><RotateCcw size={14} /></Button>
       <Button type="button" className="btn btn-outline" disabled={!active || busy} aria-label="显示全部消息" onClick={onExit}><Eye size={14} /></Button>
     </div>
-    <Disclosure title={<span className="chat-playback-settings-title">节奏与音效<span>{playbackPaceLabels[pace]} · {soundSummary(soundEnabled, soundReceive, soundSend)}</span></span>}>
-      <div className="chat-playback-field">
-        <span>节奏</span>
-        <SegmentedControl
-          aria-label="消息出现节奏"
-          value={pace}
-          disabled={busy}
-          onValueChange={value => onPaceChange(value as PlaybackPace)}
-          options={playbackPaces.map(item => ({ value: item, label: playbackPaceLabels[item] }))}
-        />
+    <Disclosure title={<span className="chat-playback-settings-title">节奏与音效<span>{paceSettingLabel(pace, Math.max(0, total - 1))} · {soundSummary(soundEnabled, soundReceive, soundSend)}</span></span>}>
+      {/* 与导出弹窗共用同一个控件，改哪边都一样；这里的说明短一些（这一栏本来就窄）。 */}
+      <div className="chat-playback-pace">
+        <span className="chat-playback-pace-title">节奏</span>
+        <PaceOption variant="bar" setting={pace} messageCount={total} labels={paceLabels} disabled={busy} onChange={onPaceChange} />
       </div>
       <div className="chat-playback-field">
         <span>提示音</span>

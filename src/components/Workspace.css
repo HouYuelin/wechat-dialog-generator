@@ -333,6 +333,29 @@
 .video-safety-chip[data-active='true'] { border-color: #a8cdb5; background: var(--studio-accent); color: var(--studio-accent-fg); font-weight: 600; }
 .video-pad-row { display: flex; align-items: center; gap: 7px; margin-top: 9px; font-size: 11px; color: var(--studio-muted); }
 .video-pad-row .ui-input { width: 78px; height: 30px; padding: 0 8px; font-size: 12px; font-variant-numeric: tabular-nums; }
+
+/* 消息出现的节奏（统一间隔 + 逐条间隔）：导出弹窗与预览上方的控制条共用，见 PaceOption。 */
+.pace-uniform { display: flex; align-items: center; gap: 10px; margin-top: 10px; }
+.pace-uniform .ui-slider { flex: 1; min-width: 0; }
+.pace-uniform-label { flex-shrink: 0; font-size: 11px; color: var(--studio-muted); }
+.pace-value { flex-shrink: 0; min-width: 46px; text-align: right; font-size: 12px; font-weight: 600; color: #27543c; font-variant-numeric: tabular-nums; }
+.pace-gaps { margin-top: 10px; padding-top: 9px; border-top: 1px dashed #d9e3dc; }
+.pace-gaps-head { display: flex; align-items: center; justify-content: space-between; gap: 8px; font-size: 11px; font-weight: 600; }
+.pace-gaps-head small { margin-left: 6px; font-size: 10px; font-weight: 400; color: var(--studio-muted); }
+.pace-gaps-fill { height: 24px; padding: 0 8px; font-size: 11px; }
+.pace-gaps-list { margin-top: 7px; max-height: 208px; overflow-y: auto; padding-right: 2px; }
+.pace-gap-row { display: flex; align-items: center; gap: 8px; }
+.pace-gap-label { flex: 1; min-width: 0; display: flex; align-items: center; gap: 5px; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; font-size: 11px; color: #4a6255; }
+.pace-gap-label b { flex-shrink: 0; min-width: 17px; padding: 1px 4px; border-radius: 4px; background: #eef5f0; color: #43624f; font-size: 10px; font-weight: 600; text-align: center; font-variant-numeric: tabular-nums; }
+.pace-gap-row .ui-slider { flex: 0 0 auto; width: 108px; }
+.pace-gap-row .pace-value { min-width: 40px; font-size: 11px; }
+/* 控制条里的那一版：整块占一行，滑杆铺满，说明用小字。 */
+.chat-playback-pace { margin-bottom: 7px; }
+.chat-playback-pace-title { display: block; margin-bottom: 5px; font-size: 11px; color: var(--studio-muted); }
+.chat-playback-pace .ui-segmented-control { width: 100%; }
+.chat-playback-pace .pace-uniform { margin-top: 7px; }
+.chat-playback-pace .pace-gaps-list { max-height: 176px; }
+.chat-playback-pace .video-option-note { font-size: 10px; }
 .video-summary { margin-top: 18px; padding: 12px 14px; border-radius: 8px; background: #f3f9f5; font-size: 11px; line-height: 1.9; color: #42604f; }
 .video-summary b { color: #27543c; }
 .video-dialog-actions { display: grid; grid-template-columns: auto minmax(0, 1fr); gap: 8px; margin-top: 18px; }

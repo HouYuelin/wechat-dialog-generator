@@ -2,10 +2,23 @@ import test from 'node:test'
 import assert from 'node:assert/strict'
 import {
   buildPlaybackTimeline,
+  clampPaceGapMs,
+  clampPaceMs,
+  defaultPaceMs,
   frameIndexAt,
+  maxGapMs,
+  maxPaceMs,
+  messageGapLabel,
+  minGapMs,
+  minPaceMs,
+  normalizeMessageGaps,
+  normalizePaceMs,
+  normalizePaceSetting,
   notifyEvents,
+  paceGapLabel,
+  paceMsFromLegacy,
+  paceSettingLabel,
   playbackDurationSeconds,
-  playbackPaceDuration,
   playbackTailMs,
   shouldPlayNotify,
   type PlaybackTimeline,
@@ -85,13 +98,16 @@ test('the tail can be overridden without touching the default', () => {
   assert.equal(playbackTailMs, 3000)
 })
 
-test('pace is clamped so a bad value cannot spin the preview too fast', () => {
-  assert.equal(playbackPaceDuration('fast'), 800)
-  assert.equal(playbackPaceDuration('normal'), 1500)
-  assert.equal(playbackPaceDuration('slow'), 2500)
-  assert.equal(playbackPaceDuration('normal', 10), 200)
-  assert.equal(playbackPaceDuration('normal', 640), 640)
-  assert.equal(playbackPaceDuration('normal', Number.NaN), 1500)
+test('统一间隔夹在 0.5–3 秒、逐条间隔夹在 0.2–10 秒，都对齐到 0.1 秒', () => {
+  assert.equal(clampPaceMs(1500), 1500)
+  assert.equal(clampPaceMs(80), minPaceMs)
+  assert.equal(clampPaceMs(9999), maxPaceMs)
+  assert.equal(clampPaceMs(1246), 1200, '不是整格的值对齐到最近的一格')
+  assert.equal(clampPaceMs(Number.NaN), defaultPaceMs, 'NaN 退回默认值而不是 0，否则消息会挤成一团')
+  assert.equal(clampPaceGapMs(1500), 1500)
+  assert.equal(clampPaceGapMs(50), minGapMs, '逐条这一档能压到 0.2 秒，同一个人连发两条才做得出来')
+  assert.equal(clampPaceGapMs(60_000), maxGapMs)
+  assert.equal(normalizePaceMs('1200'), defaultPaceMs, '只认数字')
 })
 
 test('duration label rounds up to the next half second', () => {
@@ -102,4 +118,65 @@ test('duration label rounds up to the next half second', () => {
   const timeline: PlaybackTimeline = buildPlaybackTimeline([message('text', 1), message('text', 2)], { paceMs: 1500 })
   assert.equal(timeline.totalMs, 1200 + 1500 + playbackTailMs)
   assert.equal(playbackDurationSeconds(timeline.totalMs), 6)
+})
+
+test('逐条间隔：每条按自己的间隔出现，首条仍然是开场静置', () => {
+  const messages = [message('text', 1), message('text', 2), message('text', 1), message('text', 2)]
+  const timeline = buildPlaybackTimeline(messages, { paceMode: 'perMessage', messageGaps: [1000, 300, 5000], paceMs: 1500 })
+  assert.deepEqual(timeline.steps.map(step => step.atMs), [1200, 2200, 2500, 7500])
+  assert.equal(timeline.totalMs, 7500 + playbackTailMs)
+})
+
+test('统一模式不看逐条间隔；逐条模式缺的按统一间隔补齐、多的截掉', () => {
+  const messages = [message('text', 1), message('text', 2), message('text', 1)]
+  const uniform = buildPlaybackTimeline(messages, { paceMs: 1000, messageGaps: [4000, 4000] })
+  assert.deepEqual(uniform.steps.map(step => step.atMs), [1200, 2200, 3200], '统一模式下逐条间隔整份不生效')
+
+  const short = buildPlaybackTimeline(messages, { paceMode: 'perMessage', paceMs: 1000, messageGaps: [300] })
+  assert.deepEqual(short.steps.map(step => step.atMs), [1200, 1500, 2500], '缺的那一处按统一间隔出现')
+
+  const long = buildPlaybackTimeline(messages, { paceMode: 'perMessage', paceMs: 1000, messageGaps: [300, 400, 500, 600] })
+  assert.deepEqual(long.steps.map(step => step.atMs), [1200, 1500, 1900], '多出来的那些消息已经不在对话里，直接截掉')
+
+  const single = buildPlaybackTimeline([message('text', 1)], { paceMode: 'perMessage', messageGaps: [900] })
+  assert.deepEqual(single.steps.map(step => step.atMs), [1200], '只有一条消息时没有间隔可用')
+})
+
+test('逐条间隔列表按消息条数补齐：越界夹取、脏值按统一间隔兜底、只有一条时为空', () => {
+  assert.deepEqual(normalizeMessageGaps([500, 900], 4, 1500), [500, 900, 1500])
+  assert.deepEqual(normalizeMessageGaps([500, 900, 1500, 2500], 2, 1500), [500])
+  assert.deepEqual(normalizeMessageGaps([10, 99_000, 'x', Number.NaN], 5, 800), [minGapMs, maxGapMs, 800, 800])
+  assert.deepEqual(normalizeMessageGaps([500], 1, 1500), [], '只有一条消息就没有间隔')
+  assert.deepEqual(normalizeMessageGaps('nope', 3, 1000), [1000, 1000])
+})
+
+test('节奏设置读回来时逐项清洗', () => {
+  assert.deepEqual(normalizePaceSetting(undefined), { mode: 'uniform', paceMs: defaultPaceMs, gaps: [] })
+  assert.deepEqual(normalizePaceSetting({ mode: 'perMessage', paceMs: 2460, gaps: [0, 60_000] }), { mode: 'perMessage', paceMs: 2500, gaps: [minGapMs, maxGapMs] })
+  assert.deepEqual(normalizePaceSetting({ mode: 'fast' }), { mode: 'uniform', paceMs: defaultPaceMs, gaps: [] }, '旧的档位字符串在这一层读不出来，由偏好那一层折算成毫秒')
+  assert.deepEqual(normalizePaceSetting({ mode: 'perMessage' }).gaps, [], '逐条列表缺失就是空的，等按消息条数补齐')
+})
+
+test('旧的快 / 标准 / 慢三档折算成毫秒', () => {
+  assert.equal(paceMsFromLegacy('fast'), 800)
+  assert.equal(paceMsFromLegacy('normal'), 1500)
+  assert.equal(paceMsFromLegacy('slow'), 2500)
+  assert.equal(paceMsFromLegacy('zoom'), null)
+  assert.equal(paceMsFromLegacy(1500), null)
+})
+
+test('摘要文案：统一写秒数，逐条写处数', () => {
+  assert.equal(paceSettingLabel({ mode: 'uniform', paceMs: 1500, gaps: [] }), '统一 1.5 秒')
+  assert.equal(paceSettingLabel({ mode: 'uniform', paceMs: 800, gaps: [] }), '统一 0.8 秒')
+  assert.equal(paceSettingLabel({ mode: 'perMessage', paceMs: 1500, gaps: [800, 800, 800] }, 3), '逐条 3 处间隔')
+  assert.equal(paceSettingLabel({ mode: 'perMessage', paceMs: 1500, gaps: [800, 800, 800] }), '逐条 3 处间隔', '没给条数时按列表长度说')
+  assert.equal(paceSettingLabel({ mode: 'perMessage', paceMs: 1500, gaps: [] }, 0), '逐条设置')
+  assert.equal(paceGapLabel(2400), '2.4 秒')
+})
+
+test('逐条列表里那一行认得出是哪条消息', () => {
+  assert.equal(messageGapLabel({ type: 'text', content: '好的，明天见' }, '李四'), '李四：好的，明天见')
+  assert.equal(messageGapLabel({ type: 'image', content: '' }, '李四'), '李四：[图片]')
+  assert.equal(messageGapLabel({ type: 'text', content: 'x'.repeat(30) }, null), 'x'.repeat(16) + '…')
+  assert.equal(messageGapLabel({ type: 'time', content: '上午 9:12' }), '上午 9:12')
 })

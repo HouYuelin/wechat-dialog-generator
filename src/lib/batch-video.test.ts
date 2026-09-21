@@ -1,7 +1,7 @@
 import test from 'node:test'
 import assert from 'node:assert/strict'
 import { batchVideoDurationMs, batchVideoEstimateMs, batchVideoPlan, batchVideoTask, frameRenderCostMs, scrollRenderCostMs, type BatchVideoChoice } from './batch-video'
-import { buildPlaybackTimeline, notifyEvents } from './chat-playback'
+import { buildPlaybackTimeline, defaultPaceMs, maxPaceMs, minPaceMs, notifyEvents } from './chat-playback'
 import { scrollVideoPlan } from './chat-scroll-video'
 import { videoSizeOption } from './chat-video'
 import { defaultVideoSidePad, maxVideoSidePad } from './video-padding'
@@ -14,7 +14,7 @@ const chat = (...senders: number[]): Pick<ChatMessage, 'type' | 'senderId'>[] =>
 const choice = (patch: Partial<BatchVideoChoice> = {}): BatchVideoChoice => ({
   mode: 'flip',
   sizeId: 'vertical',
-  pace: 'normal',
+  paceMs: 1500,
   soundEnabled: true,
   soundReceive: true,
   soundSend: false,
@@ -54,11 +54,21 @@ test('两侧留白整批共用一份，落到录制方案里还会再夹一次',
   assert.equal(batchVideoPlan(choice({ sidePad: -80 })).sidePad, 0)
 })
 
+test('逐条播放的间隔整批只有统一一档，落到录制方案里还会再夹一次', () => {
+  assert.equal(batchVideoPlan(choice({ paceMs: 800 })).paceMs, 800)
+  assert.equal(batchVideoPlan(choice({ paceMs: 100 })).paceMs, minPaceMs, '比下限还密的值夹回下限')
+  assert.equal(batchVideoPlan(choice({ paceMs: 99_999 })).paceMs, maxPaceMs)
+  assert.equal(batchVideoPlan(choice({ paceMs: Number.NaN })).paceMs, defaultPaceMs)
+  // 整批没有逐条间隔这回事：每条消息之间就是同一个值。
+  const task = batchVideoTask(chat(1, 2, 1), batchVideoPlan(choice({ paceMs: 800 })), 1)
+  assert.deepEqual(task.timeline!.steps.map(step => step.atMs), [1200, 2000, 2800])
+})
+
 test('逐条模式：时间轴、时长与提示音都由同一个方案算出来', () => {
   const plan = batchVideoPlan(choice())
   const messages = chat(1, 2, 1)
   const task = batchVideoTask(messages, plan, 1)
-  const timeline = buildPlaybackTimeline(messages, { pace: 'normal', selfId: 1, notifyReceived: true, notifySent: false })
+  const timeline = buildPlaybackTimeline(messages, { paceMs: 1500, selfId: 1, notifyReceived: true, notifySent: false })
 
   assert.deepEqual(task.timeline, timeline)
   assert.equal(task.totalMs, timeline.totalMs, '视频时长就是时间轴总长')
