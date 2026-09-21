@@ -170,10 +170,12 @@ test('键序不同也算同一份偏好，避免每渲染一次就写一遍存�
   // 任何一个字段真的变了都必须认出来，否则用户改的设置会写不进去。
   const slower = { ...prefs, playback: { ...prefs.playback, pace: { ...prefs.playback.pace, paceMs: maxPaceMs } } }
   assert.equal(workspacePrefsEqual(prefs, slower), false, '改统一间隔也要写进去')
-  const custom = { ...prefs, playback: { ...prefs.playback, pace: { mode: 'perMessage' as const, paceMs: 1500, gaps: [800, 800] } } }
+  const custom = { ...prefs, playback: { ...prefs.playback, pace: { mode: 'perMessage' as const, paceMs: 1500, gaps: [800, 800], leadInMs: 1200 } } }
   assert.equal(workspacePrefsEqual(prefs, custom), false, '逐条间隔改了也要写进去')
-  const sameGaps = { ...prefs, playback: { ...prefs.playback, pace: { mode: 'perMessage' as const, paceMs: prefs.playback.pace.paceMs, gaps: [800, 800] } } }
+  const sameGaps = { ...prefs, playback: { ...prefs.playback, pace: { mode: 'perMessage' as const, paceMs: prefs.playback.pace.paceMs, gaps: [800, 800], leadInMs: 1200 } } }
   assert.equal(workspacePrefsEqual(custom, sameGaps), true, '逐条列表逐项相比，内容一样就算同一份')
+  const leadInChanged = { ...prefs, playback: { ...prefs.playback, pace: { ...prefs.playback.pace, leadInMs: 0 } } }
+  assert.equal(workspacePrefsEqual(prefs, leadInChanged), false, '改开场静置也要写进去')
   const bigger = { ...prefs, style: { ...prefs.style, fontScale: defaultFontScale + 15 } }
   assert.equal(workspacePrefsEqual(prefs, bigger), false)
   const soundPicked = { ...prefs, playback: { ...prefs.playback, soundIds: { received: 'sound-1', sent: null } } }
@@ -205,7 +207,7 @@ test('偏好与设置互转后仍是完整的设置对象', () => {
 
 test('节奏偏好：旧的档位折算成毫秒，逐条间隔越界夹回、脏值逐项兜底', () => {
   // 老版本存的是 'fast' | 'normal' | 'slow' 一个字符串：折算成毫秒，别让老用户被打回默认节奏。
-  assert.deepEqual(normalizeWorkspacePrefs({ playback: { pace: 'fast' } }).playback.pace, { mode: 'uniform', paceMs: 800, gaps: [] })
+  assert.deepEqual(normalizeWorkspacePrefs({ playback: { pace: 'fast' } }).playback.pace, { mode: 'uniform', paceMs: 800, gaps: [], leadInMs: 1200 })
   assert.equal(normalizeWorkspacePrefs({ playback: { pace: 'slow' } }).playback.pace.paceMs, 2500)
   assert.equal(normalizeWorkspacePrefs({ playback: { pace: 'zoom' } }).playback.pace.paceMs, defaultPaceMs)
 

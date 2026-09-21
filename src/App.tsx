@@ -1222,6 +1222,7 @@ function App() {
       paceMs: paceSetting.paceMs,
       paceMode: paceSetting.mode,
       messageGaps: paceSetting.gaps,
+      leadInMs: paceSetting.leadInMs,
       selfId,
       notifyReceived: soundReceive,
       notifySent: soundSend,

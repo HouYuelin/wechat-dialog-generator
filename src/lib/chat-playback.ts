@@ -49,10 +49,12 @@ export interface PaceSetting {
   paceMs: number
   /** 逐条间隔（毫秒）：gaps[i] 是第 i+1 条出现前等到第 i 条的时长。 */
   gaps: number[]
+  /** 首条消息出现前的静置时长（毫秒），可设成 0 让第一条立刻出来。 */
+  leadInMs: number
 }
 
 export function defaultPaceSetting(): PaceSetting {
-  return { mode: 'uniform', paceMs: defaultPaceMs, gaps: [] }
+  return { mode: 'uniform', paceMs: defaultPaceMs, gaps: [], leadInMs: defaultLeadInMs }
 }
 
 /** 收到消息与发送消息的音效各自可选，默认只响「收到」那一声。 */
@@ -63,8 +65,17 @@ export interface PlaybackNotifyOptions {
   notifySent?: boolean
 }
 
-/** 首条消息出现前的静置时长（保留一小段空对话，剪辑时更好接）。 */
-export const playbackLeadInMs = 1200
+/**
+ * 首条消息出现前的静置时长。它原本是写死的 1200，现在放进节奏设置里让用户自己调：
+ * 有人想第一条消息立刻出来（设为 0），有人想留一小段空对话（剪辑时更好接）。
+ */
+export const defaultLeadInMs = 1200
+/** 开场静置的范围与步长（毫秒）：0–3 秒，每格 0.1 秒。 */
+export const minLeadInMs = 0
+export const maxLeadInMs = 3000
+export const leadInStepMs = 100
+/** 兼容旧字段名：老代码与旧偏好里用的都是这个名字，保留作别名。 */
+export const playbackLeadInMs = defaultLeadInMs
 /**
  * 末条消息之后的留白，也就是「结尾那一帧」的停留时间。
  * 3 秒是录屏和导出视频都够用的收尾时间：视频的最后一帧正好停这么久，
@@ -92,6 +103,12 @@ export function clampPaceGapMs(value: number) {
   return Math.min(maxGapMs, Math.max(minGapMs, roundToStep(value, gapStepMs)))
 }
 
+/** 开场静置：0–3 秒，NaN 退回默认值（0 表示第一条消息立刻出现）。 */
+export function clampLeadInMs(value: number) {
+  if (!Number.isFinite(value)) return defaultLeadInMs
+  return Math.min(maxLeadInMs, Math.max(minLeadInMs, roundToStep(value, leadInStepMs)))
+}
+
 /** 读回来的值不能全信：存储被手改过、旧版本没有这个字段都会走到这里。 */
 export function normalizePaceMs(value: unknown) {
   return typeof value === 'number' ? clampPaceMs(value) : defaultPaceMs
@@ -112,6 +129,7 @@ export function normalizePaceSetting(raw: unknown): PaceSetting {
     mode: normalizePaceMode(source.mode),
     paceMs: normalizePaceMs(source.paceMs),
     gaps: normalizePaceGapList(source.gaps),
+    leadInMs: typeof source.leadInMs === 'number' ? clampLeadInMs(source.leadInMs) : defaultLeadInMs,
   }
 }
 
@@ -220,17 +238,24 @@ export function shouldPlayNotify(
 
 export function buildPlaybackTimeline(messages: Pick<ChatMessage, 'type' | 'senderId'>[], options: PlaybackOptions = {}): PlaybackTimeline {
   const uniformMs = normalizePaceMs(options.paceMs)
-  // 逐条模式下 gaps[i] 是第 i+1 条出现前等的时长；统一模式只用一个值，两处共用一个增量。
-  const gaps = options.paceMode === 'perMessage' ? normalizeMessageGaps(options.messageGaps, messages.length, uniformMs) : null
-  const leadInMs = Math.max(0, options.leadInMs ?? playbackLeadInMs)
+  // 逐条模式下 gaps[i] 是「第 i+1 条真实消息出现前等的时长」。时间分隔条不算真实消息——
+  // 它只换行不占等待，所以 gap 数按「非时间消息条数」算，而不是 messages.length。
+  const realCount = messages.filter(msg => msg.type !== 'time').length
+  const gaps = options.paceMode === 'perMessage' ? normalizeMessageGaps(options.messageGaps, realCount, uniformMs) : null
+  const leadInMs = Math.max(0, options.leadInMs ?? defaultLeadInMs)
   const tailMs = Math.max(0, options.tailMs ?? playbackTailMs)
   const selfId = options.selfId ?? null
 
   const steps: PlaybackStep[] = []
   let atMs = leadInMs
+  // 时间分隔条紧跟其上一条消息出现（同一个 atMs），既不推进间隔、也不占逐条间隔的槽位。
+  let gapCursor = 0
   messages.forEach((msg, index) => {
-    // 首条与播放起点之间是开场静置，不算「两条消息之间的间隔」。
-    if (index > 0) atMs += gaps ? gaps[index - 1] : uniformMs
+    if (msg.type !== 'time') {
+      // 第一条真实消息与播放起点之间是开场静置，不算「两条消息之间的间隔」。
+      if (gapCursor > 0) atMs += gaps ? gaps[gapCursor - 1] : uniformMs
+      gapCursor += 1
+    }
     steps.push({ index, atMs, notify: shouldPlayNotify(msg, selfId, options) })
   })
 

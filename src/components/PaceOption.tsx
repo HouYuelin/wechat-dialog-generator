@@ -1,11 +1,15 @@
 import { SegmentedControl, Slider } from './ui/controls'
 import {
+  clampLeadInMs,
   clampPaceGapMs,
   clampPaceMs,
   gapStepMs,
+  leadInStepMs,
   maxGapMs,
+  maxLeadInMs,
   maxPaceMs,
   minGapMs,
+  minLeadInMs,
   minPaceMs,
   normalizeMessageGaps,
   paceGapLabel,
@@ -13,7 +17,6 @@ import {
   paceModes,
   paceSecondsLabel,
   paceStepMs,
-  playbackLeadInMs,
   type PaceMode,
   type PaceSetting,
 } from '@/lib/chat-playback'
@@ -52,6 +55,7 @@ export function PaceOption({
   setting, messageCount, labels, disabled, variant = 'dialog', uniformOnly = false, onChange,
 }: PaceOptionProps) {
   const uniform = clampPaceMs(setting.paceMs)
+  const leadIn = clampLeadInMs(setting.leadInMs)
   const gapCount = Math.max(0, messageCount - 1)
   const perMessage = !uniformOnly && setting.mode === 'perMessage'
   const gaps = perMessage ? normalizeMessageGaps(setting.gaps, messageCount, uniform) : []
@@ -59,6 +63,7 @@ export function PaceOption({
 
   const setMode = (mode: PaceMode) => onChange({ ...setting, mode })
   const setUniform = (ms: number) => onChange({ ...setting, paceMs: clampPaceMs(ms) })
+  const setLeadIn = (ms: number) => onChange({ ...setting, leadInMs: clampLeadInMs(ms) })
   const setGap = (index: number, ms: number) => {
     const next = normalizeMessageGaps(setting.gaps, messageCount, uniform)
     next[index] = clampPaceGapMs(ms)
@@ -89,9 +94,24 @@ export function PaceOption({
       <span className="pace-value">{paceSecondsLabel(uniform)} 秒</span>
     </div>
 
+    {/* 首条消息出现前的静置：可设成 0 让第一条立刻出来。 */}
+    <div className="pace-uniform">
+      <span className="pace-uniform-label">开场静置</span>
+      <Slider
+        aria-label="首条消息出现前的等待（秒）"
+        min={minLeadInMs}
+        max={maxLeadInMs}
+        step={leadInStepMs}
+        disabled={disabled}
+        value={leadIn}
+        onValueChange={setLeadIn}
+      />
+      <span className="pace-value">{paceSecondsLabel(leadIn)} 秒</span>
+    </div>
+
     <p className={noteClass}>
       {perMessage
-        ? `统一间隔留作默认值——新加进来的消息按它出现，也可以把下面所有间隔一键设成 ${paceSecondsLabel(uniform)} 秒。逐条列表每行是“这一条比上一条晚多久出现”，可调 0.2–10 秒；首条消息前面是 ${paceSecondsLabel(playbackLeadInMs)} 秒开场静置。`
+        ? `统一间隔留作默认值——新加进来的消息按它出现，也可以把下面所有间隔一键设成 ${paceSecondsLabel(uniform)} 秒。逐条列表每行是“这一条比上一条晚多久出现”，可调 0.2–10 秒；开场静置是第一条消息出现前的等待，可设成 0 秒让它立刻出来。`
         : '所有消息之间都等这么久（0.5–3 秒）。想让个别几条单独不一样，切到「逐条设置」。这个间隔同时决定预览播放与导出视频，预览里看到的就是导出后的那一版。'}
     </p>
 

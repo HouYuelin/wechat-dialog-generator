@@ -2,11 +2,14 @@ import test from 'node:test'
 import assert from 'node:assert/strict'
 import {
   buildPlaybackTimeline,
+  clampLeadInMs,
   clampPaceGapMs,
   clampPaceMs,
+  defaultLeadInMs,
   defaultPaceMs,
   frameIndexAt,
   maxGapMs,
+  maxLeadInMs,
   maxPaceMs,
   messageGapLabel,
   minGapMs,
@@ -63,8 +66,24 @@ test('notification kind follows self, the two toggles and time notices', () => {
 
 test('notify events line up with the frame changes of the messages that make the sound', () => {
   const timeline = buildPlaybackTimeline([message('text', 1), message('text', 2), message('time', 2), message('text', 2)], { paceMs: 1000, selfId: 1 })
-  assert.deepEqual(notifyEvents(timeline), [{ atMs: 2200, kind: 'received' }, { atMs: 4200, kind: 'received' }])
+  // 时间分隔条紧跟其上一条消息出现（同一时刻），不占间隔，也不推进后面那条消息的等待。
+  assert.deepEqual(notifyEvents(timeline), [{ atMs: 2200, kind: 'received' }, { atMs: 3200, kind: 'received' }])
   assert.deepEqual(timeline.steps.map(step => step.notify), [null, 'received', null, 'received'])
+})
+
+test('时间分隔条不占等待：紧跟其上一条消息，不推进也不消耗间隔', () => {
+  const timeline = buildPlaybackTimeline([message('text', 1), message('time', 2), message('text', 2)], { paceMs: 1000, selfId: 1 })
+  // 三条：首条 text(1200)、time 紧跟(1200)、下一条 text(2200)。
+  assert.deepEqual(timeline.steps.map(step => step.atMs), [1200, 1200, 2200])
+
+  // 逐条模式下 gap 数按「非时间消息条数」算：2 条真实消息只有 1 个 gap。
+  const per = buildPlaybackTimeline([message('text', 1), message('time', 2), message('text', 2), message('text', 1)], { paceMode: 'perMessage', messageGaps: [500, 4000], paceMs: 1000, selfId: 1 })
+  // text(1200)、time(1200)、text(1200+500=1700)、text(1700+4000=5700)。
+  assert.deepEqual(per.steps.map(step => step.atMs), [1200, 1200, 1700, 5700])
+
+  // 开场静置设成 0，第一条立刻出现。
+  const zero = buildPlaybackTimeline([message('text', 1), message('text', 2)], { paceMs: 1000, leadInMs: 0 })
+  assert.deepEqual(zero.steps.map(step => step.atMs), [0, 1000])
 })
 
 test('the outgoing sound is a different kind and only fires when enabled', () => {
@@ -108,6 +127,10 @@ test('统一间隔夹在 0.5–3 秒、逐条间隔夹在 0.2–10 秒，都对�
   assert.equal(clampPaceGapMs(50), minGapMs, '逐条这一档能压到 0.2 秒，同一个人连发两条才做得出来')
   assert.equal(clampPaceGapMs(60_000), maxGapMs)
   assert.equal(normalizePaceMs('1200'), defaultPaceMs, '只认数字')
+  assert.equal(clampLeadInMs(0), 0, '开场静置可以压到 0')
+  assert.equal(clampLeadInMs(1500), 1500)
+  assert.equal(clampLeadInMs(9999), maxLeadInMs)
+  assert.equal(clampLeadInMs(Number.NaN), defaultLeadInMs, 'NaN 退回默认值')
 })
 
 test('duration label rounds up to the next half second', () => {
@@ -151,10 +174,13 @@ test('逐条间隔列表按消息条数补齐：越界夹取、脏值按统一�
 })
 
 test('节奏设置读回来时逐项清洗', () => {
-  assert.deepEqual(normalizePaceSetting(undefined), { mode: 'uniform', paceMs: defaultPaceMs, gaps: [] })
-  assert.deepEqual(normalizePaceSetting({ mode: 'perMessage', paceMs: 2460, gaps: [0, 60_000] }), { mode: 'perMessage', paceMs: 2500, gaps: [minGapMs, maxGapMs] })
-  assert.deepEqual(normalizePaceSetting({ mode: 'fast' }), { mode: 'uniform', paceMs: defaultPaceMs, gaps: [] }, '旧的档位字符串在这一层读不出来，由偏好那一层折算成毫秒')
+  assert.deepEqual(normalizePaceSetting(undefined), { mode: 'uniform', paceMs: defaultPaceMs, gaps: [], leadInMs: 1200 })
+  assert.deepEqual(normalizePaceSetting({ mode: 'perMessage', paceMs: 2460, gaps: [0, 60_000] }), { mode: 'perMessage', paceMs: 2500, gaps: [minGapMs, maxGapMs], leadInMs: 1200 })
+  assert.deepEqual(normalizePaceSetting({ mode: 'fast' }), { mode: 'uniform', paceMs: defaultPaceMs, gaps: [], leadInMs: 1200 }, '旧的档位字符串在这一层读不出来，由偏好那一层折算成毫秒')
   assert.deepEqual(normalizePaceSetting({ mode: 'perMessage' }).gaps, [], '逐条列表缺失就是空的，等按消息条数补齐')
+  assert.equal(normalizePaceSetting({ leadInMs: 0 }).leadInMs, 0, '开场静置可设成 0')
+  assert.equal(normalizePaceSetting({ leadInMs: 9999 }).leadInMs, maxLeadInMs, '开场静置夹到上限')
+  assert.equal(normalizePaceSetting({ leadInMs: Number.NaN }).leadInMs, defaultLeadInMs, 'NaN 退回默认值')
 })
 
 test('旧的快 / 标准 / 慢三档折算成毫秒', () => {
@@ -166,11 +192,11 @@ test('旧的快 / 标准 / 慢三档折算成毫秒', () => {
 })
 
 test('摘要文案：统一写秒数，逐条写处数', () => {
-  assert.equal(paceSettingLabel({ mode: 'uniform', paceMs: 1500, gaps: [] }), '统一 1.5 秒')
-  assert.equal(paceSettingLabel({ mode: 'uniform', paceMs: 800, gaps: [] }), '统一 0.8 秒')
-  assert.equal(paceSettingLabel({ mode: 'perMessage', paceMs: 1500, gaps: [800, 800, 800] }, 3), '逐条 3 处间隔')
-  assert.equal(paceSettingLabel({ mode: 'perMessage', paceMs: 1500, gaps: [800, 800, 800] }), '逐条 3 处间隔', '没给条数时按列表长度说')
-  assert.equal(paceSettingLabel({ mode: 'perMessage', paceMs: 1500, gaps: [] }, 0), '逐条设置')
+  assert.equal(paceSettingLabel({ mode: 'uniform', paceMs: 1500, gaps: [], leadInMs: 1200 }), '统一 1.5 秒')
+  assert.equal(paceSettingLabel({ mode: 'uniform', paceMs: 800, gaps: [], leadInMs: 1200 }), '统一 0.8 秒')
+  assert.equal(paceSettingLabel({ mode: 'perMessage', paceMs: 1500, gaps: [800, 800, 800], leadInMs: 1200 }, 3), '逐条 3 处间隔')
+  assert.equal(paceSettingLabel({ mode: 'perMessage', paceMs: 1500, gaps: [800, 800, 800], leadInMs: 1200 }), '逐条 3 处间隔', '没给条数时按列表长度说')
+  assert.equal(paceSettingLabel({ mode: 'perMessage', paceMs: 1500, gaps: [], leadInMs: 1200 }, 0), '逐条设置')
   assert.equal(paceGapLabel(2400), '2.4 秒')
 })
 
