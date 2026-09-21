@@ -9,8 +9,7 @@ import type { NotifyKind } from './notify-sound'
  * - `uniform`：所有消息之间用同一个间隔，取值范围 0.5–3 秒（滑杆）；
  * - `perMessage`：逐条自己设，第 i 项是「第 i+1 条出现前等多久」，N 条消息对应 N-1 个间隔。
  *
- * 逐条的范围比统一宽（0.2–10 秒）：这一档的意义就是「大体上按统一来，个别几条例外」，
- * 例外得真有地方可去——同一个人连发两条要能压得很密，隔了很久才回一条也要能拉长。
+ * 逐条的范围是 0–3 秒：比统一间隔低到 0，能把两条压到「连着发」，上限与统一一致。
  */
 export type PaceMode = 'uniform' | 'perMessage'
 
@@ -20,9 +19,9 @@ export const maxPaceMs = 3000
 export const paceStepMs = 100
 export const defaultPaceMs = 1500
 
-/** 逐条间隔的范围与步长（毫秒）：比统一间隔两头都宽，理由见文件开头。 */
-export const minGapMs = 200
-export const maxGapMs = 10000
+/** 逐条间隔的范围与步长（毫秒）：0–3 秒，每格 0.1 秒。 */
+export const minGapMs = 0
+export const maxGapMs = 3000
 export const gapStepMs = 100
 /** 逐条间隔列表的长度上限：没人会一条条设到几百条，只是别让存储里堆一个长数组。 */
 export const maxMessageGaps = 400
@@ -109,7 +108,7 @@ export function clampPaceMs(value: number) {
   return Math.min(maxPaceMs, Math.max(minPaceMs, roundToStep(value, paceStepMs)))
 }
 
-/** 逐条间隔：同上，只是范围更宽。 */
+/** 逐条间隔：同上，范围是 0–3 秒，NaN 退回默认值。 */
 export function clampPaceGapMs(value: number) {
   if (!Number.isFinite(value)) return defaultPaceMs
   return Math.min(maxGapMs, Math.max(minGapMs, roundToStep(value, gapStepMs)))

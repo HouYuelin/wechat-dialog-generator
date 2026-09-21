@@ -81,9 +81,9 @@ test('时间分隔条不占等待：紧跟其上一条消息，不推进也不�
   assert.deepEqual(timeline.steps.map(step => step.atMs), [1200, 1200, 2200])
 
   // 逐条模式下 gap 数按「非时间消息条数」算：2 条真实消息只有 1 个 gap。
-  const per = buildPlaybackTimeline([message('text', 1), message('time', 2), message('text', 2), message('text', 1)], { paceMode: 'perMessage', messageGaps: [500, 4000], paceMs: 1000, selfId: 1 })
-  // text(1200)、time(1200)、text(1200+500=1700)、text(1700+4000=5700)。
-  assert.deepEqual(per.steps.map(step => step.atMs), [1200, 1200, 1700, 5700])
+  const per = buildPlaybackTimeline([message('text', 1), message('time', 2), message('text', 2), message('text', 1)], { paceMode: 'perMessage', messageGaps: [500, 2500], paceMs: 1000, selfId: 1 })
+  // text(1200)、time(1200)、text(1200+500=1700)、text(1700+2500=4200)。
+  assert.deepEqual(per.steps.map(step => step.atMs), [1200, 1200, 1700, 4200])
 
   // 开场静置设成 0，第一条立刻出现。
   const zero = buildPlaybackTimeline([message('text', 1), message('text', 2)], { paceMs: 1000, leadInMs: 0 })
@@ -121,14 +121,14 @@ test('the tail can be overridden without touching the default', () => {
   assert.equal(playbackTailMs, 3000)
 })
 
-test('统一间隔夹在 0.5–3 秒、逐条间隔夹在 0.2–10 秒，都对齐到 0.1 秒', () => {
+test('统一间隔夹在 0.5–3 秒、逐条间隔夹在 0–3 秒，都对齐到 0.1 秒', () => {
   assert.equal(clampPaceMs(1500), 1500)
   assert.equal(clampPaceMs(80), minPaceMs)
   assert.equal(clampPaceMs(9999), maxPaceMs)
   assert.equal(clampPaceMs(1246), 1200, '不是整格的值对齐到最近的一格')
   assert.equal(clampPaceMs(Number.NaN), defaultPaceMs, 'NaN 退回默认值而不是 0，否则消息会挤成一团')
   assert.equal(clampPaceGapMs(1500), 1500)
-  assert.equal(clampPaceGapMs(50), minGapMs, '逐条这一档能压到 0.2 秒，同一个人连发两条才做得出来')
+  assert.equal(clampPaceGapMs(0), 0, '逐条这一档能压到 0 秒，同一个人连发两条几乎同时出')
   assert.equal(clampPaceGapMs(60_000), maxGapMs)
   assert.equal(normalizePaceMs('1200'), defaultPaceMs, '只认数字')
   assert.equal(clampLeadInMs(0), 0, '开场静置可以压到 0')
@@ -155,9 +155,9 @@ test('duration label rounds up to the next half second', () => {
 
 test('逐条间隔：每条按自己的间隔出现，首条仍然是开场静置', () => {
   const messages = [message('text', 1), message('text', 2), message('text', 1), message('text', 2)]
-  const timeline = buildPlaybackTimeline(messages, { paceMode: 'perMessage', messageGaps: [1000, 300, 5000], paceMs: 1500 })
-  assert.deepEqual(timeline.steps.map(step => step.atMs), [1200, 2200, 2500, 7500])
-  assert.equal(timeline.totalMs, 7500 + playbackTailMs)
+  const timeline = buildPlaybackTimeline(messages, { paceMode: 'perMessage', messageGaps: [1000, 300, 3000], paceMs: 1500 })
+  assert.deepEqual(timeline.steps.map(step => step.atMs), [1200, 2200, 2500, 5500])
+  assert.equal(timeline.totalMs, 5500 + playbackTailMs)
 })
 
 test('统一模式不看逐条间隔；逐条模式缺的按统一间隔补齐、多的截掉', () => {
