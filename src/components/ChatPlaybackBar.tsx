@@ -113,7 +113,7 @@ export function ChatPlaybackBar({
           ? <PickSoundButton kind="sent" name={customSoundNames.sent} disabled={busy || !soundEnabled} onPick={onPickSound} fallbackHint="微信式「咻」" />
           : <span className="chat-playback-hint">自己的消息，微信式「咻」</span>}
       </div>
-      <p className="chat-playback-note">开始后预览逐条出现，可用录屏软件直接录制（播放不消耗额度）。播放期间图片导出会暂停，点“显示全部”即恢复；要一键导出带提示音的视频，用下方“生成视频”。音源选「我的音频」后，收发两声都能换成自己上传的音效。</p>
+      <p className="chat-playback-note">开始后预览逐条出现，可用录屏软件直接录制（播放不消耗额度）。播放期间图片导出会暂停，点“显示全部”即恢复；要一键导出带提示音的视频，用下方“生成视频”。音源选「我的音频」后，收发两声都能换成自己上传的音效。这一栏的节奏、提示音与音源都会被记住，下次打开或导入新聊天内容都继续沿用。</p>
     </Disclosure>
   </div>
 }

@@ -2,6 +2,7 @@ import { useRef, useState } from 'react';
 import { Users, Upload, X, UserCheck, Images, History, RotateCcw, Trash2, PencilLine } from 'lucide-react';
 import { getDefaultAvatar } from '@/lib/parser';
 import { avatarNameKey } from '@/lib/user-avatars';
+import { rememberNameHistory } from '@/lib/name-history-store';
 import type { AvatarPreset } from '@/lib/avatar-presets';
 import type { ChatUser } from '@/types';
 import { Button } from './ui/button';
@@ -108,7 +109,11 @@ export function UserAvatarManager({
   const commitRename = (preset: AvatarPreset) => {
     const accepted = onRenamePreset?.(preset, renameDraft);
     // 没改成（重名、空名字）就把输入框留着，用户不用重新点一次铅笔。
-    if (accepted !== false) setRenamingId(null);
+    if (accepted !== false) {
+      // 改成功的新名字也收进「最近用过的昵称」，聊天标题、朋友圈里能直接点选。
+      rememberNameHistory(renameDraft);
+      setRenamingId(null);
+    }
   };
 
   return (

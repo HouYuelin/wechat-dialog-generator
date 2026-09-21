@@ -2,7 +2,7 @@ import { Disclosure } from './ui/controls';
 import { useState, useRef } from 'react';
 import { PlusCircle, Type, Image, Gift, Banknote, Mic, Clock, X } from 'lucide-react';
 import type { ChatUser, ChatMessage, MessageType } from '@/types';
-import type { MediaAsset } from '@/lib/media-library';
+import { imageMessageKinds, type MediaAsset, type MediaKind } from '@/lib/media-library';
 import { MediaLibraryStrip } from './MediaLibraryDialog';
 import { Input } from './ui/input';
 import { Textarea } from './ui/textarea';
@@ -22,12 +22,13 @@ interface MessageEditorProps {
   onImagePreviewChange: (value: string | null) => void;
   /** 上传一张新图：交给外层读文件并顺手存进素材库，返回可用的 data URL。 */
   onUploadImage?: (file: File) => Promise<string | null>;
-  /** 素材库里已有的表情图片，供「图片」一栏直接点选。 */
-  stickers?: MediaAsset[];
+  /** 整份素材库。图片一栏会为每个「能发进对话」的类目各显示一条快捷条（表情图片、商品图）。 */
+  mediaAssets?: MediaAsset[];
   libraryEnabled?: boolean;
   /** 用掉一张库里的素材，外层借此更新「最近使用」顺序。 */
-  onStickerUsed?: (asset: MediaAsset) => void;
-  onOpenStickerLibrary?: () => void;
+  onAssetUsed?: (asset: MediaAsset) => void;
+  /** 打开素材库弹窗，带上要管理 / 上传的类目。 */
+  onOpenImageLibrary?: (kind: MediaKind) => void;
 }
 
 const MSG_TYPES: { type: MessageType; label: string; icon: React.ReactNode }[] = [
@@ -39,7 +40,7 @@ const MSG_TYPES: { type: MessageType; label: string; icon: React.ReactNode }[] =
   { type: 'time', label: '时间', icon: <Clock size={14} /> },
 ];
 
-export function MessageEditor({ users, selfId, onAddMessage, imagePreview, onImagePreviewChange, onUploadImage, stickers = [], libraryEnabled = false, onStickerUsed, onOpenStickerLibrary }: MessageEditorProps) {
+export function MessageEditor({ users, selfId, onAddMessage, imagePreview, onImagePreviewChange, onUploadImage, mediaAssets = [], libraryEnabled = false, onAssetUsed, onOpenImageLibrary }: MessageEditorProps) {
   const [msgType, setMsgType] = useState<MessageType>('text');
   const [senderId, setSenderId] = useState<number | ''>(selfId ?? '');
   const [textContent, setTextContent] = useState('');
@@ -176,15 +177,18 @@ export function MessageEditor({ users, selfId, onAddMessage, imagePreview, onIma
           </div>
         )}
 
-        {msgType === 'image' && onOpenStickerLibrary && (
+        {msgType === 'image' && onOpenImageLibrary && imageMessageKinds.map(kind => (
           <MediaLibraryStrip
-            assets={stickers}
-            kind="sticker"
+            key={kind}
+            assets={mediaAssets}
+            kind={kind}
+            // 商品图通常比表情攒得多，快捷条多给几格；两边都只是「最近用过的」。
+            limit={kind === 'product' ? 12 : 8}
             enabled={libraryEnabled}
-            onPick={asset => { onImagePreviewChange(asset.dataUrl); onStickerUsed?.(asset); }}
-            onManage={onOpenStickerLibrary}
+            onPick={asset => { onImagePreviewChange(asset.dataUrl); onAssetUsed?.(asset); }}
+            onManage={() => onOpenImageLibrary(kind)}
           />
-        )}
+        ))}
 
         {msgType === 'redpacket' && (
           <Input

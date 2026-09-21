@@ -1,0 +1,49 @@
+/* 最近用过的昵称——输入框下面那一行筹码 */
+.name-suggest {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: center;
+  gap: 5px;
+  margin-top: 6px;
+}
+.name-suggest-label {
+  display: inline-flex;
+  align-items: center;
+  gap: 3px;
+  font-size: 10px;
+  color: var(--studio-muted, #8b968f);
+}
+.name-suggest-chip {
+  display: inline-flex;
+  align-items: center;
+  border-radius: 999px;
+  background: #eff5f1;
+  max-width: 170px;
+}
+.name-suggest-pick {
+  border: 0;
+  background: none;
+  padding: 4px 7px;
+  font-size: 10px;
+  color: #4d6558;
+  cursor: pointer;
+  max-width: 150px;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+.name-suggest-pick:hover {
+  color: #1f7a4d;
+}
+.name-suggest-forget {
+  display: inline-flex;
+  align-items: center;
+  border: 0;
+  background: none;
+  padding: 4px 7px 4px 0;
+  color: #9aada3;
+  cursor: pointer;
+}
+.name-suggest-forget:hover {
+  color: #b4423a;
+}

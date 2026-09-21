@@ -8,8 +8,13 @@ import {
   dataUrlBytes,
   findAssetByDataUrl,
   formatBytes,
+  imageMessageKinds,
+  isImageMessageKind,
   mediaAssetMeta,
   mediaImportSummaryText,
+  mediaKindLabels,
+  mediaKindUnits,
+  mediaKinds,
   mediaLibrarySummary,
   mediaLibrarySummaryLabel,
   normalizeMediaLibrary,
@@ -164,12 +169,46 @@ test('按 dataUrl 能找到库里已有的同图，用来复用同一条记录',
 })
 
 test('库容量说明按类目给数量与总体积', () => {
-  const library = [asset('avatar', 'a', 1), asset('sticker', 'b', 2), asset('sticker', 'c', 3), asset('background', 'd', 4)]
+  const library = [asset('avatar', 'a', 1), asset('sticker', 'b', 2), asset('sticker', 'c', 3), asset('background', 'd', 4), asset('product', 'e', 5)]
   const summary = mediaLibrarySummary(library)
-  assert.deepEqual(summary.counts, { avatar: 1, sticker: 2, background: 1 })
-  assert.equal(summary.total, 4)
-  assert.match(mediaLibrarySummaryLabel(summary), /^1 个头像 · 2 张表情 · 1 张背景 · /)
+  assert.deepEqual(summary.counts, { avatar: 1, sticker: 2, background: 1, product: 1 })
+  assert.equal(summary.total, 5)
+  assert.match(mediaLibrarySummaryLabel(summary), /^1 个头像 · 2 张表情 · 1 张背景 · 1 张商品图 · /)
   assert.equal(mediaLibrarySummaryLabel(mediaLibrarySummary([])), '还没有素材')
+})
+
+test('每个类目都有名字与量词，加类目时界面文案自动跟上', () => {
+  // 分页控件与统计文案都是从这里生成的，缺一条就会渲染出 undefined。
+  for (const kind of mediaKinds) {
+    assert.ok(mediaKindLabels[kind], `${kind} 缺标签`)
+    assert.ok(mediaKindUnits[kind], `${kind} 缺量词`)
+  }
+  assert.equal(mediaKindLabels.product, '商品图')
+  assert.equal(mediaKindUnits.product, '张商品图')
+})
+
+test('商品图是独立类目：上限、去重、快捷条都各算各的', () => {
+  const library = [asset('product', 'p-1', 1), asset('product', 'p-2', 2), asset('sticker', 's-1', 3)]
+  const filled = addMediaAssets(library, [asset('product', 'p-3', 4)], { maxPerKind: 2 })
+  assert.equal(filled.rejected, 1)
+  assert.equal(filled.library, library)
+  // 商品图满了不影响表情图片的额度。
+  assert.equal(addMediaAssets(library, [asset('sticker', 's-2', 4)], { maxPerKind: 2 }).rejected, 0)
+  assert.equal(addMediaAssets(library, [asset('product', 'p-1', 4)]).duplicated, 1)
+  // 快捷条只挑商品图，不会混进表情。
+  assert.deepEqual(recentMediaAssets(library, 'product').map(item => item.id), ['p-2', 'p-1'])
+  assert.equal(createMediaAsset({ kind: 'product', dataUrl: png('p') }).name, '商品图')
+  assert.equal(normalizeMediaLibrary([asset('product', 'p', 1)]).length, 1)
+  // 认不出的类目仍然照旧丢掉。
+  assert.equal(normalizeMediaLibrary([{ id: 'x', kind: 'goods', dataUrl: png('x') }]).length, 0)
+})
+
+test('表情图片与商品图都能发进对话，头像和背景图不能', () => {
+  assert.deepEqual(imageMessageKinds, ['sticker', 'product'])
+  assert.equal(isImageMessageKind('sticker'), true)
+  assert.equal(isImageMessageKind('product'), true)
+  assert.equal(isImageMessageKind('avatar'), false)
+  assert.equal(isImageMessageKind('background'), false)
 })
 
 test('背景图是独立类目：上限、去重、快捷条都各算各的', () => {

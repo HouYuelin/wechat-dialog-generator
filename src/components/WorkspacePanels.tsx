@@ -53,6 +53,7 @@ import {
   resolveFontScale,
   type FontScaleId,
 } from '@/lib/font-size'
+import { getWorkspacePrefs, patchWorkspacePrefs } from '@/lib/workspace-prefs-store'
 import './Workspace.css'
 
 interface WorkspacePanelsProps {
@@ -104,10 +105,11 @@ export function WorkspacePanels({ children, preview, previewActions, previewTitl
   const fontScaleValue = normalizeFontScale(fontScale)
   const [view, setView] = useState<'edit' | 'preview'>('edit')
   // autoWidth 是量出来的自适应宽度；sizeMode 是用户手动选定的档位，选 auto 时才会用前者。
+  // 档位与自定义宽度跟着偏好长期留着：录屏取景时这几个数选过一次就不想再调。
   const [autoWidth, setAutoWidth] = useState(300)
-  const [sizeMode, setSizeMode] = useState<PhoneSizeId>('auto')
-  const [customWidth, setCustomWidth] = useState(430)
-  const [customDraft, setCustomDraft] = useState('430')
+  const [sizeMode, setSizeMode] = useState<PhoneSizeId>(() => getWorkspacePrefs().display.phoneSize)
+  const [customWidth, setCustomWidth] = useState(() => getWorkspacePrefs().display.customPhoneWidth)
+  const [customDraft, setCustomDraft] = useState(() => String(getWorkspacePrefs().display.customPhoneWidth))
   // 屏幕尺寸的最终值由父级保存（导出要用），这里只维护弹层里的档位和草稿。
   const [screenMode, setScreenMode] = useState<ScreenSizeId>(() => screenPresetIdFor(screen ?? defaultScreenSize))
   const [screenDraft, setScreenDraft] = useState<ScreenSize>(screen ?? defaultScreenSize)
@@ -151,6 +153,11 @@ export function WorkspacePanels({ children, preview, previewActions, previewTitl
     return () => observer.disconnect()
   }, [focus, aspect])
 
+  /** 记住窗口宽度的档位与自定义值（只改 display 那一半，其余偏好不动）。 */
+  const rememberDisplay = (next: { phoneSize?: PhoneSizeId; customPhoneWidth?: number }) => {
+    patchWorkspacePrefs({ display: { ...getWorkspacePrefs().display, ...next } })
+  }
+
   const chooseSize = (id: PhoneSizeId) => {
     setSizeMode(id)
     // 从别的档位切过来时，先把草稿对齐到当前实际宽度，免得输入框里是上一次的旧值。
@@ -158,7 +165,10 @@ export function WorkspacePanels({ children, preview, previewActions, previewTitl
       const next = clampPhoneWidth(phoneWidth)
       setCustomWidth(next)
       setCustomDraft(String(next))
+      rememberDisplay({ phoneSize: id, customPhoneWidth: next })
+      return
     }
+    rememberDisplay({ phoneSize: id })
   }
 
   // 输入过程中不夹取，否则输到一半的「4」会被立刻顶成 200，和用户抢输入。
@@ -167,6 +177,7 @@ export function WorkspacePanels({ children, preview, previewActions, previewTitl
     const next = clampPhoneWidth(Number.isNaN(parsed) ? customWidth : parsed)
     setCustomWidth(next)
     setCustomDraft(String(next))
+    rememberDisplay({ customPhoneWidth: next })
   }
 
   const chooseScreen = (id: ScreenSizeId) => {
@@ -423,6 +434,7 @@ export function WorkspacePanels({ children, preview, previewActions, previewTitl
                     <p className="workspace-size-note">{fontChoice ? fontChoice.note : fontCustomNote}</p>
                     <p className="workspace-size-note">字号、行高、气泡留白与头像会一起缩放，一屏能放下的消息条数跟着变；预览与导出用的是同一个值。</p>
                   </div>}
+                  <p className="workspace-size-note">这一段里的四项（窗口大小、屏幕尺寸、图片大小、字号）都会被记住：刷新页面、新建空白对话、导入新的聊天内容都继续沿用，不会回到默认值。</p>
                 </Popover.Popup>
               </Popover.Positioner>
             </Popover.Portal>

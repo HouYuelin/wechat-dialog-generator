@@ -1,5 +1,5 @@
 /**
- * 素材库：把上传过的头像、表情图片和背景图留下来，下次直接从库里选，不用再翻本地文件。
+ * 素材库：把上传过的头像、表情图片、背景图和商品图留下来，下次直接从库里选，不用再翻本地文件。
  *
  * 这里只管「怎么记、怎么挑、怎么淘汰」，不碰浏览器存储（落库见 project-store 的
  * media-assets store）也不碰 DOM（读文件、压缩见 image-file.ts）。所有函数都是纯的，
@@ -11,20 +11,22 @@
  */
 import type { ChatUser } from '../types'
 
-export type MediaKind = 'avatar' | 'sticker' | 'background'
+export type MediaKind = 'avatar' | 'sticker' | 'background' | 'product'
 
-export const mediaKinds: MediaKind[] = ['avatar', 'sticker', 'background']
+export const mediaKinds: MediaKind[] = ['avatar', 'sticker', 'background', 'product']
 
 export const mediaKindLabels: Record<MediaKind, string> = {
   avatar: '头像',
   sticker: '表情图片',
   background: '背景图',
+  product: '商品图',
 }
 
 export const mediaKindUnits: Record<MediaKind, string> = {
   avatar: '个头像',
   sticker: '张表情',
   background: '张背景',
+  product: '张商品图',
 }
 
 export interface MediaAsset {
@@ -49,7 +51,18 @@ export interface MediaAsset {
 export const maxAssetsPerKind = 2000
 
 export function isMediaKind(value: unknown): value is MediaKind {
-  return value === 'avatar' || value === 'sticker' || value === 'background'
+  return value === 'avatar' || value === 'sticker' || value === 'background' || value === 'product'
+}
+
+/**
+ * 能发进对话的图片类目。表情图片与商品图分两个类目只是为了找起来方便，
+ * 用起来是同一件事——往「图片」消息里塞一张图，所以选图的两条链路（快捷条与弹窗回传）
+ * 都走这一个判断，加类目时只改这里。
+ */
+export const imageMessageKinds: MediaKind[] = ['sticker', 'product']
+
+export function isImageMessageKind(kind: MediaKind) {
+  return imageMessageKinds.includes(kind)
 }
 
 /**

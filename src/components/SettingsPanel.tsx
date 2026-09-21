@@ -8,6 +8,8 @@ import { Slider, Switch } from './ui/controls';
 import { ColorField, TimeField } from './ui/color-field';
 import { Button } from './ui/button';
 import { MediaLibraryStrip } from './MediaLibraryDialog';
+import { NameSuggest } from './NameSuggest';
+import { rememberNameHistory } from '@/lib/name-history-store';
 
 interface SettingsPanelProps {
   settings: PhoneSettings;
@@ -82,7 +84,19 @@ export function SettingsPanel({
           </div>
           <div className="form-item">
             <label className="form-label" htmlFor={`${fieldId}-title`}>聊天标题</label>
-            <Input id={`${fieldId}-title`} disabled={disabled} value={settings.contactName} onChange={(e) => update({ contactName: e.target.value })} />
+            <Input
+              id={`${fieldId}-title`}
+              disabled={disabled}
+              value={settings.contactName}
+              onChange={(e) => update({ contactName: e.target.value })}
+              onBlur={() => { if (!disabled) rememberNameHistory(settings.contactName); }}
+            />
+            {!disabled && (
+              <NameSuggest
+                exclude={[settings.contactName]}
+                onPick={name => { rememberNameHistory(name); update({ contactName: name }); }}
+              />
+            )}
           </div>
           <div className="form-item">
             <label className="form-label" htmlFor={`${fieldId}-signal`}>主卡信号</label>

@@ -9,6 +9,9 @@ import { WorkspacePanels } from './WorkspacePanels'
 import { beginExportLog } from '@/lib/export-log'
 import { ScenePreviewFrame } from './ScenePreviewFrame'
 import { MediaLibraryStrip } from './MediaLibraryDialog'
+import { NameSuggest } from './NameSuggest'
+import { nameHistoryKey } from '@/lib/name-history'
+import { rememberNameHistory } from '@/lib/name-history-store'
 import { ColorField } from './ui/color-field'
 import { Input } from './ui/input'
 import { Textarea } from './ui/textarea'
@@ -129,8 +132,20 @@ export function MomentsEditor({
     const names = likeInput.split(/[、,，\s]+/).map(item => item.trim()).filter(Boolean)
     if (!names.length) return
     update('likes', [...new Set([...draft.likes, ...names])])
+    // 加过的人名收进「最近用过」，下次点赞/评论直接点选。
+    rememberNameHistory(names)
     setLikeInput('')
   }, [draft.likes, likeInput, update])
+
+  /** 从筹码行点一个人名：直接加进点赞列表（同名的忽略），不用再点一次「添加」。 */
+  const addLike = useCallback((name: string) => {
+    const clean = name.trim()
+    if (!clean) return
+    if (!draft.likes.some(item => nameHistoryKey(item) === nameHistoryKey(clean))) {
+      update('likes', [...draft.likes, clean])
+    }
+    rememberNameHistory(clean)
+  }, [draft.likes, update])
 
   const addComment = useCallback(() => {
     if (!commentAuthor.trim() || !commentContent.trim()) return
@@ -139,6 +154,7 @@ export function MomentsEditor({
       author: commentAuthor.trim(),
       content: commentContent.trim(),
     }])
+    rememberNameHistory(commentAuthor.trim())
     setCommentContent('')
   }, [commentAuthor, commentContent, draft.comments, update])
 
@@ -216,7 +232,9 @@ export function MomentsEditor({
               {draft.avatar ? <img src={draft.avatar} alt="头像" /> : <span>{draft.author.slice(0, 1) || '我'}</span>}
               <input type="file" accept="image/*" aria-label="上传发布者头像" onChange={event => { void handleAvatar(event.target.files?.[0]) }} />
             </label>
-            <label>昵称<Input className="me-input" value={draft.author} maxLength={20} onChange={event => update('author', event.target.value)} /></label>
+            <label>昵称<Input className="me-input" value={draft.author} maxLength={20} onChange={event => update('author', event.target.value)} onBlur={() => rememberNameHistory(draft.author)} />
+              <NameSuggest exclude={[draft.author]} onPick={name => { update('author', name); rememberNameHistory(name); }} />
+            </label>
           </div>
           <div className="moments-cover-editor">
             <div className="moments-label-line"><span>朋友圈背景</span><small>封面图</small></div>
@@ -279,12 +297,16 @@ export function MomentsEditor({
           <div className="scene-workspace-section-heading scene-section-description"><h3 id="moment-social-heading">点赞与评论</h3><p>添加创作中的互动信息</p></div>
           <div className="moments-form">
           <div className="moments-inline-editor">
-            <label>点赞用户<Input className="me-input" value={likeInput} placeholder="多个昵称用逗号分隔" onChange={event => setLikeInput(event.target.value)} onKeyDown={event => { if (event.key === 'Enter' && !event.nativeEvent.isComposing) addLikes() }} /></label>
+            <label>点赞用户<Input className="me-input" value={likeInput} placeholder="多个昵称用逗号分隔" onChange={event => setLikeInput(event.target.value)} onKeyDown={event => { if (event.key === 'Enter' && !event.nativeEvent.isComposing) addLikes() }} />
+              <NameSuggest label="最近用过的昵称" exclude={draft.likes} onPick={addLike} />
+            </label>
             <Button variant="outline" className="btn btn-outline" type="button" onClick={addLikes}><Plus size={14} /> 添加</Button>
           </div>
           {draft.likes.length > 0 && <div className="moments-chip-list">{draft.likes.map(name => <Button variant="secondary" size="sm" style={{ height: 'auto' }} key={name} type="button" aria-label={`移除 ${name} 的点赞`} onClick={() => update('likes', draft.likes.filter(item => item !== name))}>{name}<X size={12} /></Button>)}</div>}
           <div className="moments-comment-editor">
-            <label>评论人<Input className="me-input" value={commentAuthor} onChange={event => setCommentAuthor(event.target.value)} /></label>
+            <label>评论人<Input className="me-input" value={commentAuthor} onChange={event => setCommentAuthor(event.target.value)} />
+              <NameSuggest exclude={[commentAuthor]} onPick={name => { setCommentAuthor(name); rememberNameHistory(name); }} />
+            </label>
             <label>评论内容<Input className="me-input" value={commentContent} onChange={event => setCommentContent(event.target.value)} /></label>
             <Button variant="outline" className="btn btn-outline" type="button" onClick={addComment}><Plus size={14} /> 添加评论</Button>
           </div>

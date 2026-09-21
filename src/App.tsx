@@ -37,13 +37,14 @@ import {
   type PlaybackPace,
 } from '@/lib/chat-playback';
 import { pickVideoMimeType, videoContainerLabel, videoExportSupported, videoFileExtension, videoSizeOption, type VideoSizeId } from '@/lib/chat-video';
-import { defaultScreenSize, screenSizeLabel, type ScreenSize } from '@/lib/phone-size';
+import { screenSizeLabel, type ScreenSize } from '@/lib/phone-size';
 import { recordChatVideo, recordScrollingChatVideo } from '@/lib/chat-video-recorder';
-import { defaultScrollDurationSeconds, scrollVideoPlan } from '@/lib/chat-scroll-video';
+import { scrollVideoPlan } from '@/lib/chat-scroll-video';
 import { loadNotifySoundFile, notifyAudioContext, playNotify, resumeNotifyAudio, type NotifyCustomBuffers, type NotifyKind } from '@/lib/notify-sound';
 import {
   addSoundAssets,
   createSoundAsset,
+  findSoundAssetById,
   removeSoundAsset,
   renameSoundAsset,
   touchSoundAsset,
@@ -60,7 +61,8 @@ import {
   type OfficialAccountPlacement,
 } from '@/components/OfficialAccountDialog';
 import { appendMessageToRecord, parseChatRecord } from '@/lib/parser';
-import { avatarNameKey, carryOverAvatars, carryOverSelfId } from '@/lib/user-avatars';
+import { avatarNameKey, carryOverAvatars, carryOverSelfId, isSelfAlias } from '@/lib/user-avatars';
+import { rememberNameHistory } from '@/lib/name-history-store';
 import {
   applyPresetsToUsers,
   removeAvatarPreset,
@@ -118,6 +120,7 @@ import {
   assignAvatars,
   createMediaAsset,
   findAssetByDataUrl,
+  isImageMessageKind,
   mediaAssetsOfKind,
   removeMediaAsset,
   renameMediaAsset,
@@ -126,30 +129,28 @@ import {
   type MediaImportSummary,
   type MediaKind,
 } from '@/lib/media-library';
-import { defaultImageMax } from '@/lib/image-size';
-import { defaultFontScale } from '@/lib/font-size';
 import type { ChatUser, ChatMessage, PhoneSettings } from '@/types';
+import {
+  defaultPhoneSettings,
+  settingsWithStyle,
+  stylePrefsFromSettings,
+  type PlaybackPrefs,
+} from '@/lib/workspace-prefs';
+import { getWorkspacePrefs, patchWorkspacePrefs } from '@/lib/workspace-prefs-store';
 
 /** 背景图有两个用处：聊天背景写进手机样式，朋友圈封面写进朋友圈草稿。 */
 type BackgroundTarget = 'chat' | 'moments';
 
-const defaultSettings: PhoneSettings = {
-  platform: 'ios',
-  time: '12:02',
-  signal: 4,
-  secondarySignal: 3,
-  simMode: 'single',
-  wifiEnabled: true,
-  battery: 60,
-  contactName: '',
-  unreadCount: 1,
-  selfBubbleColor: '#95ec69',
-  otherBubbleColor: '#ffffff',
-  backgroundColor: '#ededed',
-  backgroundImage: null,
-  imageMax: defaultImageMax,
-  fontScale: defaultFontScale,
-};
+/**
+ * 以偏好为底的一份设置：首屏用它，套用同款模板链接时也拿它当底。
+ *
+ * 内容是**不带样式**的 —— 打开草稿只换内容，样式继续用偏好（见 restoreWorkspace 里的注释），
+ * 只有同款模板链接会把样式一起带过来，那是用户显式点了「套用这个样式」。链接里没有的字段
+ * （比如旧链接没有字号）用我现在的偏好补上，而不是产品默认值。
+ */
+function preferredSettingsBase(): PhoneSettings {
+  return settingsWithStyle(defaultPhoneSettings, getWorkspacePrefs().style);
+}
 
 interface MediaImportOutcome extends MediaImportSummary {
   /** 与传入文件顺序一致、可以直接用的素材（库里已有同图时复用旧记录）。 */
@@ -199,7 +200,8 @@ function App() {
   const [importText, setImportText] = useState('');
   const [users, setUsers] = useState<ChatUser[]>([]);
   const [messages, setMessages] = useState<ChatMessage[]>([]);
-  const [settings, setSettings] = useState<PhoneSettings>(defaultSettings);
+  // 样式同样从偏好起步：这个浏览器里上次设置的样子，而不是产品默认值。
+  const [settings, setSettings] = useState<PhoneSettings>(() => preferredSettingsBase());
   const [selfId, setSelfId] = useState<number | null>(null);
   // 素材库：上传过的头像与表情都留在这里，下次直接点选，不用再翻本地文件。
   const [library, setLibrary] = useState<MediaAsset[]>([]);
@@ -222,21 +224,24 @@ function App() {
   const [playbackActive, setPlaybackActive] = useState(false);
   const [playbackPlaying, setPlaybackPlaying] = useState(false);
   const [revealedCount, setRevealedCount] = useState(0);
-  const [playbackPace, setPlaybackPace] = useState<PlaybackPace>('normal');
-  const [soundEnabled, setSoundEnabled] = useState(true);
+  // 播放与导出这一组也全部从偏好取初值：它们原先只活在内存里，刷新一次就回默认。
+  const [playbackPace, setPlaybackPace] = useState<PlaybackPace>(() => getWorkspacePrefs().playback.pace);
+  const [soundEnabled, setSoundEnabled] = useState(() => getWorkspacePrefs().playback.soundEnabled);
   // 收到与发送是两种不同的音效，各自可选：默认只响「收到」，发送音效按需打开。
-  const [soundReceive, setSoundReceive] = useState(true);
-  const [soundSend, setSoundSend] = useState(false);
+  const [soundReceive, setSoundReceive] = useState(() => getWorkspacePrefs().playback.soundReceive);
+  const [soundSend, setSoundSend] = useState(() => getWorkspacePrefs().playback.soundSend);
   const revealedCountRef = useRef(0);
   useEffect(() => { revealedCountRef.current = revealedCount }, [revealedCount]);
   const [videoOpen, setVideoOpen] = useState(false);
-  const [videoSize, setVideoSize] = useState<VideoSizeId>('vertical');
+  const [videoSize, setVideoSize] = useState<VideoSizeId>(() => getWorkspacePrefs().playback.videoSize);
   // 录制方式决定后面几项设置怎么用：逐条播放调出现节奏，滚动到底调视频总时长。
-  const [videoMode, setVideoMode] = useState<VideoCaptureMode>('flip');
-  const [scrollDuration, setScrollDuration] = useState(defaultScrollDurationSeconds);
+  const [videoMode, setVideoMode] = useState<VideoCaptureMode>(() => getWorkspacePrefs().playback.videoMode);
+  const [scrollDuration, setScrollDuration] = useState(() => getWorkspacePrefs().playback.scrollDuration);
   // 屏幕尺寸就是导出分辨率：图片、视频帧都按它渲染。
-  const [screenSize, setScreenSize] = useState<ScreenSize>(defaultScreenSize);
-  const [soundSource, setSoundSource] = useState<'synth' | 'custom'>('synth');
+  const [screenSize, setScreenSize] = useState<ScreenSize>(() => getWorkspacePrefs().playback.screenSize);
+  const [soundSource, setSoundSource] = useState<'synth' | 'custom'>(() => getWorkspacePrefs().playback.soundSource);
+  /** 上次选的音效是否已经尝试恢复过：恢复是异步的（要先把音效库读出来），见下面那个 effect。 */
+  const soundRestored = useRef(false);
   // 自定义提示音按收/发各存一条：收到替换「叮咚」，发送替换「咻」，互不影响。
   // buffer 不可序列化，只留内存；音效库里存的是可持久化的 data URL（见 SoundAsset）。
   const [customSounds, setCustomSounds] = useState<{ received: CustomSoundEntry | null; sent: CustomSoundEntry | null }>({ received: null, sent: null });
@@ -313,6 +318,63 @@ function App() {
   }, []);
 
   /**
+   * 恢复上次选的音效：偏好里只存得下音效库的 id，得等库读出来才知道那一条还在不在，
+   * 所以放在库就绪之后。id 对应不上（音效被删了）就什么都不做 —— 播放侧本来就会退回内置合成音。
+   */
+  useEffect(() => {
+    if (!soundLibraryReady || soundRestored.current) return;
+    soundRestored.current = true;
+    // 这里只解码不播放，音频上下文处于 suspended 也没关系：decodeAudioData 与上下文状态无关。
+    const context = notifyAudioContext();
+    if (!context) return;
+    const ids = getWorkspacePrefs().playback.soundIds;
+    void (async () => {
+      const restored: { kind: NotifyKind; entry: CustomSoundEntry }[] = [];
+      for (const kind of ['received', 'sent'] as NotifyKind[]) {
+        const asset = ids[kind] ? findSoundAssetById(soundLibrary, ids[kind]!) : null;
+        if (!asset) continue;
+        try {
+          const blob = await (await fetch(asset.dataUrl)).blob();
+          const buffer = await loadNotifySoundFile(context, blob);
+          restored.push({ kind, entry: { id: asset.id, name: asset.name, durationSeconds: buffer.duration, buffer } });
+        } catch {
+          // 这一条读不出来就跳过，另一条照常恢复。
+        }
+      }
+      if (!restored.length) return;
+      setCustomSounds(previous => {
+        const next = { ...previous };
+        for (const { kind, entry } of restored) next[kind] = entry;
+        return next;
+      });
+    })();
+  }, [soundLibrary, soundLibraryReady]);
+
+  /**
+   * 偏好：把「这次用的设置」沉淀成「下次的起点」。导入新聊天内容、新建空白对话、刷新页面
+   * 都从这里取值，不再恢复成产品默认值。聊天标题不在其中 —— 它跟着内容走。
+   */
+  useEffect(() => {
+    const playback: PlaybackPrefs = {
+      pace: playbackPace,
+      soundEnabled,
+      soundReceive,
+      soundSend,
+      soundSource,
+      // 音效是异步恢复的：还没恢复完就写，会把上次选的那两条 id 抹掉。
+      soundIds: soundRestored.current
+        ? { received: customSounds.received?.id ?? null, sent: customSounds.sent?.id ?? null }
+        : getWorkspacePrefs().playback.soundIds,
+      screenSize,
+      videoSize,
+      videoMode,
+      scrollDuration,
+    };
+    // 只写样式与播放导出这一半：预览的窗口宽度是 display 那一半，由尺寸弹层自己写，别在这里覆盖掉。
+    patchWorkspacePrefs({ style: stylePrefsFromSettings(settings), playback });
+  }, [customSounds, playbackPace, screenSize, scrollDuration, settings, soundEnabled, soundReceive, soundSend, soundSource, videoMode, videoSize]);
+
+  /**
    * 记档：只要某位角色身上挂着头像，就把「角色名 + 头像」写进归档。
    * 这里只增不删——取消头像、换一张新的、角色离开对话都不会清掉记录，
    * 删除只发生在用户点「用过的头像」里那个删除按钮的时候。
@@ -350,7 +412,7 @@ function App() {
           setImportText(sharedSnapshot.importText);
           setUsers(sharedSnapshot.users);
           setMessages(sharedSnapshot.messages);
-          setSettings({ ...defaultSettings, ...sharedSnapshot.settings });
+          setSettings({ ...preferredSettingsBase(), ...sharedSnapshot.settings });
           setSelfId(sharedSnapshot.selfId);
           setActiveProjectId(null);
           setActiveProjectName(`${projectName(sharedSnapshot)} 同款`);
@@ -374,7 +436,9 @@ function App() {
           setImportText(active.importText);
           setUsers(active.users);
           setMessages(active.messages);
-          setSettings({ ...defaultSettings, ...active.settings });
+          // 草稿只带内容：样式（配色、字号、图片大小、气泡……）一律用我现在的偏好，
+          // 只有聊天标题按草稿里存的恢复。否则打开一份旧草稿就会把我设好的样式冲回默认值。
+          setSettings(current => ({ ...current, contactName: active.settings?.contactName || '' }));
           setSelfId(active.selfId);
           setActiveProjectId(active.id);
           setActiveProjectName(active.name);
@@ -685,7 +749,9 @@ function App() {
     setImportText('');
     setUsers([]);
     setMessages([]);
-    setSettings(defaultSettings);
+    // 样式、音效、屏幕尺寸这些是「我的偏好」，不跟着内容走：新建空白对话时继续沿用，
+    // 只把跟着内容的那一项（聊天标题）清掉，不再恢复成产品默认值。
+    setSettings(current => ({ ...current, contactName: '' }));
     setSelfId(null);
     // 待添加的那张图属于刚才那份内容，换项目/新建时一起清掉。
     setDraftImage(null);
@@ -723,7 +789,8 @@ function App() {
     setImportText(project.importText);
     setUsers(project.users);
     setMessages(project.messages);
-    setSettings({ ...defaultSettings, ...project.settings });
+    // 同打开草稿：只把内容换过来，样式仍是我现在的偏好（下方注释同 restoreWorkspace）。
+    setSettings(current => ({ ...current, contactName: project.settings?.contactName || '' }));
     setSelfId(project.selfId);
     setDraftImage(null);
     setActiveProjectId(project.id);
@@ -823,6 +890,9 @@ function App() {
     setUsers(nextUsers);
     setMessages(result.messages);
     setSelfId(carryOverSelfId(nextUsers, users, selfId));
+    // 导入过的角色名收进「最近用过的昵称」：换聊天标题、发朋友圈、做场景页时能直接点选。
+    // 「我」是解析器给自己起的别名，不算用户用过的昵称，不塞进历史。
+    rememberNameHistory(result.users.map(user => user.name).filter(name => !isSelfAlias(name)));
     if (result.users.length >= 3) {
       const otherNames = result.users.slice(1).map(u => u.name);
       const nameStr = result.users.length <= 4
@@ -1057,11 +1127,11 @@ function App() {
       if (target.userId !== undefined && kind === 'avatar') {
         applyAvatar(target.userId, asset);
         closeLibraryPicker();
-      } else if (target.msgId !== undefined && kind === 'sticker') {
+      } else if (target.msgId !== undefined && isImageMessageKind(kind)) {
         handleUpdateMessage(target.msgId, asset.dataUrl);
         markAssetUsed(asset.id);
         closeLibraryPicker();
-      } else if (target.draft && kind === 'sticker') {
+      } else if (target.draft && isImageMessageKind(kind)) {
         setDraftImage(asset.dataUrl);
         markAssetUsed(asset.id);
         closeLibraryPicker();
@@ -1080,14 +1150,14 @@ function App() {
       showToast(`已换上「${asset.name}」`);
       return;
     }
-    if (target?.msgId !== undefined && asset.kind === 'sticker') {
+    if (target?.msgId !== undefined && isImageMessageKind(asset.kind)) {
       handleUpdateMessage(target.msgId, asset.dataUrl);
       markAssetUsed(asset.id);
       closeLibraryPicker();
       showToast('这条消息的图片已更换');
       return;
     }
-    if (target?.draft && asset.kind === 'sticker') {
+    if (target?.draft && isImageMessageKind(asset.kind)) {
       setDraftImage(asset.dataUrl);
       markAssetUsed(asset.id);
       closeLibraryPicker();
@@ -1226,25 +1296,12 @@ function App() {
   }, [messages.length]);
 
   // ===================== 视频导出 =====================
-  // 直接上传音频：kind 决定这次传的是收到音还是发送音。
-  const handleSoundFile = useCallback(async (file: File, kind: NotifyKind) => {
-    setSoundError('');
-    const context = unlockAudio();
-    if (!context) { setSoundError('当前浏览器不支持音频处理，请改用 Chrome 或 Edge。'); return; }
-    try {
-      const buffer = await loadNotifySoundFile(context, file);
-      setCustomSounds(prev => ({ ...prev, [kind]: { name: file.name, durationSeconds: buffer.duration, buffer } }));
-      setSoundSource('custom');
-    } catch (error) {
-      setCustomSounds(prev => ({ ...prev, [kind]: null }));
-      setSoundError(error instanceof Error ? error.message : '音频读取失败，请换一个文件。');
-    }
-  }, [unlockAudio]);
-
-  // 音效库：上传过的自定义提示音长期留着。这里负责「读文件 → 转 data URL → 解码取时长 → 入库」。
-  const handleSoundLibraryUpload = useCallback(async (file: File): Promise<string | null> => {
-    const context = unlockAudio();
-    if (!context) throw new Error('当前浏览器不支持音频处理，请改用 Chrome 或 Edge。');
+  /**
+   * 收一个音频文件：转 data URL → 解码取时长 → 入音效库 → 返回可以直接用的那一条。
+   * 两条上传入口（播放条上直接选文件、音效库弹窗里上传）共用它，所以是「上传即入库」：
+   * 直接选的那段音频下次不在本地找了也能在音效库里翻到，和素材库是同一条规矩。
+   */
+  const ingestSoundFile = useCallback(async (context: AudioContext, file: File): Promise<{ asset: SoundAsset; buffer: AudioBuffer }> => {
     // 先转 data URL 存起来，再解码取时长；解码失败则不入库。
     const dataUrl = await new Promise<string>((resolve, reject) => {
       const reader = new FileReader();
@@ -1260,10 +1317,39 @@ function App() {
       bytes: file.size,
     });
     const { library: next, added } = addSoundAssets(soundLibrary, [created]);
-    setSoundLibrary(next);
-    if (soundLibraryReady && added.length) void putSoundAssets(added).catch(() => {});
-    return created.name;
-  }, [unlockAudio, soundLibrary, soundLibraryReady]);
+    if (added.length) {
+      setSoundLibrary(next);
+      if (soundLibraryReady) void putSoundAssets(added).catch(() => {});
+      return { asset: created, buffer };
+    }
+    // 库里已经有同一段音频（同一个文件传了两次）：复用旧记录的 id，
+    // 别让偏好指向一条不存在的音效。库满时不收录，返回的这条只活这一次。
+    const existing = next.find(asset => asset.dataUrl === created.dataUrl) ?? created;
+    return { asset: existing, buffer };
+  }, [soundLibrary, soundLibraryReady]);
+
+  // 直接上传音频：kind 决定这次传的是收到音还是发送音。
+  const handleSoundFile = useCallback(async (file: File, kind: NotifyKind) => {
+    setSoundError('');
+    const context = unlockAudio();
+    if (!context) { setSoundError('当前浏览器不支持音频处理，请改用 Chrome 或 Edge。'); return; }
+    try {
+      const { asset, buffer } = await ingestSoundFile(context, file);
+      setCustomSounds(prev => ({ ...prev, [kind]: { id: asset.id, name: asset.name, durationSeconds: buffer.duration, buffer } }));
+      setSoundSource('custom');
+    } catch (error) {
+      setCustomSounds(prev => ({ ...prev, [kind]: null }));
+      setSoundError(error instanceof Error ? error.message : '音频读取失败，请换一个文件。');
+    }
+  }, [ingestSoundFile, unlockAudio]);
+
+  // 音效库弹窗里的上传：同一条链路，回执用音效名。
+  const handleSoundLibraryUpload = useCallback(async (file: File): Promise<string | null> => {
+    const context = unlockAudio();
+    if (!context) throw new Error('当前浏览器不支持音频处理，请改用 Chrome 或 Edge。');
+    const { asset } = await ingestSoundFile(context, file);
+    return asset.name;
+  }, [ingestSoundFile, unlockAudio]);
 
   // 从音效库选一条：把它的 data URL 解码回 AudioBuffer，填进当前目标（收/发）那一声，并记一次使用。
   const handlePickSound = useCallback(async (asset: SoundAsset) => {
@@ -1536,7 +1622,7 @@ function App() {
         ? '点一张即可换到这条消息上；新上传的图也会留在库里。'
         : libraryPicker?.draft
           ? '点一张放进「添加消息 → 图片」，再点添加即可。'
-          : '上传过的头像、表情和背景图都会留在这里，下次直接点选即可，不用再翻本地文件。';
+          : '上传过的头像、表情、背景图和商品图都会留在这里，下次直接点选即可，不用再翻本地文件。';
 
   return (
     <>
@@ -1620,10 +1706,10 @@ function App() {
                     imagePreview={draftImage}
                     onImagePreviewChange={setDraftImage}
                     onUploadImage={uploadImageFile}
-                    stickers={mediaAssetsOfKind(library, 'sticker')}
+                    mediaAssets={library}
                     libraryEnabled={libraryReady}
-                    onStickerUsed={asset => markAssetUsed(asset.id)}
-                    onOpenStickerLibrary={() => setLibraryPicker({ kind: 'sticker', draft: true })}
+                    onAssetUsed={asset => markAssetUsed(asset.id)}
+                    onOpenImageLibrary={kind => setLibraryPicker({ kind, draft: true })}
                   />}
                   {!hasMessages && <div className="workspace-getting-started"><span>第一次使用？</span><p>按“姓名：消息”逐行输入，点击解析即可预览。也可以从模板开始。</p><StudioLink route="resources" onNavigate={navigate}>选择对话模板 <ArrowRight size={14} /></StudioLink></div>}
                 </TabsContent>
@@ -1711,17 +1797,19 @@ function App() {
         assets={library}
         kind={libraryPicker?.kind ?? 'sticker'}
         onKindChange={kind => setLibraryPicker(current => !current ? { kind } : {
-          // 换类目就等于换了用途，旧目标（某位角色 / 某条消息 / 某处背景）不再适用，一并清掉。
+          // 换类目通常等于换了用途，旧目标（某位角色 / 某条消息 / 某处背景）不再适用就清掉。
+          // 例外是表情图片与商品图：两者都是往「图片」消息里塞一张图，来回切时目标留着，
+          // 不然在弹窗里换个类目挑图，选完就不知道该发给哪条消息了。
           kind,
           userId: kind === 'avatar' ? current.userId : undefined,
-          msgId: kind === 'sticker' ? current.msgId : undefined,
-          draft: kind === 'sticker' ? current.draft : undefined,
+          msgId: isImageMessageKind(kind) ? current.msgId : undefined,
+          draft: isImageMessageKind(kind) ? current.draft : undefined,
           background: kind === 'background' ? current.background : undefined,
         })}
         enabled={libraryReady}
         title={libraryTitle}
         description={libraryDescription}
-        pickLabel={libraryPicker?.background ? '用作背景' : libraryPicker?.userId !== undefined ? '设为头像' : '使用'}
+        pickLabel={libraryPicker?.background ? '用作背景' : libraryPicker?.userId !== undefined ? '设为头像' : libraryPicker?.msgId !== undefined ? '换这张' : libraryPicker?.draft ? '用这张' : '使用'}
         onPick={handlePickFromLibrary}
         onUpload={handleLibraryUpload}
         onRemove={handleRemoveAsset}

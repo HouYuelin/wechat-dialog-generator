@@ -323,3 +323,135 @@
 - 预览播放（定时发送）现在与导出视频用同一套自定义音源，录屏听感一致。
 - 单测从 189 增至 190：`customSoundReplaces` 按新语义重写，另加 `resolveCustomBuffers` 的新旧入参归并用例。
 
+## 2026-09-21 昵称记忆（输入过的名字直接点选）
+
+需求：昵称输入过一次之后要能缓存下来，下次直接选，不用重打。
+
+### 为什么单开一份「名字历史」，而不是从现有数据推导
+
+- `users`（聊天角色）是解析聊天记录的结果：换一段记录整份被替换，而且那里的名字来自导入文本、不是用户敲的。
+- 头像归档（`avatar-presets`）只记住**配过头像**的名字，朋友圈的评论人、场景页的收款方都不在里面。
+
+所以需要一个只装名字的通用历史，四个工具的输入处共用：`SettingsPanel` 的聊天标题、`MomentsEditor` 的昵称 / 评论人 / 点赞用户、`WechatSceneEditor` 的 `names` 字段、`UserAvatarManager` 的头像归档改名。另外 `App.tsx` 的 `handleImport` 会把解析出的角色名一并记进去（排除解析器给自己起的「我」），这样导入过一次之后，那些名字在朋友圈、场景页里都能直接点选。
+
+### 分层与存储
+
+- `src/lib/name-history.ts`：纯逻辑（测试友好）。`nameHistoryKey`（复用 `user-avatars` 的 `avatarNameKey`，与头像归档认人同一套归一化规则，免得「小林」「小林 」各占一格）、`cleanDisplayName`、`splitNameText`、`normalizeNameHistory`、`sortNameHistory`、`rememberNames`、`forgetName`；上限 `maxNameHistory = 100`。
+- `src/lib/name-history-store.ts`：localStorage（键 `wechat-dialog-generator:name-history`）+ 订阅 + 快照，供 `useSyncExternalStore` 使用。**不跟着素材库走 IndexedDB**：这份数据就是几十个字符串，而它要在输入框旁边同步渲染出筹码行，IndexedDB 的异步读取会先闪一帧空白。读写全部包 try/catch，隐私模式下退化成「只在本次会话有效」，不影响输入。
+- `src/components/NameSuggest.tsx` + `NameSuggest.css`：筹码行。历史为空时返回 null（不占位），名字点一下回填 / 追加，右侧 × 从历史里删掉。
+
+### 两条容易踩的规则
+
+- **新记录的时间戳取「当前时刻」与「已有最新 + 1ms」的较大者**（`rememberNames` 里的 `base`）。否则调用方给同一时刻时（同一毫秒连记两个名字、系统时钟被往回拨），新名字会被塞到列表中间——单测「超出上限时丢掉最久没用过的」一开始就是这样挂掉的。
+- **一格多人的输入，点筹码是追加而不是覆盖**：`members`（群成员昵称）与 `likes`（点赞用户）会先拆开现有值（`splitNameText`，中英文逗号 / 顿号 / 分号 / 换行都认），同名的跳过，再用「，」接上；单个名字的字段则直接回填。
+- `rememberNames` 在「已经排最前、写法也没变」时**原数组返回**，调用方（store 的 `commit`）据此跳过写库与通知——输入框 blur 会频繁走到这里。
+
+### 接入点
+
+- `SettingsPanel`：聊天标题的输入框失焦时记录，下面一行筹码点选即改标题（`disabled` 的批量工作页里不显示）。
+- `MomentsEditor`：昵称（失焦记录 + 点选回填）、评论人（同上，添加评论时也记一次）、点赞用户（点筹码**直接加进点赞列表**，不用再点「添加」）。
+- `WechatSceneEditor`：`FieldDefinition` 新增 `names?: 'single' | 'multi'`，标在收款方 / 发送人 / 昵称 / 群聊名称（single）与成员昵称（multi）上；`multi` 的失焦记录会把整串拆开逐个记住。
+- `UserAvatarManager`：给归档改名成功时才记入历史（重名被拒时不记），这里不加筹码行——改名要求名字唯一，铺一排在下面反而容易点出重名。改名的输入本来就可以直接用档案里已有的名字。
+
+### 行为变化
+
+- 单测从 190 增至 201：新增 `name-history.test.ts` 11 条（归一化去重、排序、上限淘汰、脏数据清洗、分隔符拆分等）。
+
+## 2026-09-21 商品图（素材库第四个类目）
+
+需求是「素材库除了头像、表情包、背景图，再加一栏商品图，功能和其他的一致」。母婴 / 带货内容里商品图会越攒越多，混在表情图片里找不着，所以单独一类。
+
+### 加类目，不动存储
+
+- `MediaKind` 增加 `product`，`mediaKinds` / `mediaKindLabels`（商品图）/ `mediaKindUnits`（张商品图）/ `isMediaKind()` 跟着补。分页控件（`MediaLibraryDialog` 的 `kindOptions`）、统计文案（`mediaLibrarySummaryLabel`）、上限与去重（`addMediaAssets`）全是从 `mediaKinds` 与 `counts: Record<MediaKind, number>` 推出来的，**存储层与弹窗组件一行没改**，`media-assets` store 也不必再升数据库版本（升版本只为新建 store）。
+- 「功能一致」在代码里的落点是这三条共用规则：同一张图重复上传只留一条（按 data URL 去重）、每类各自 2000 张上限且只拒收不自动删、网格按 `createdAt` 倒序而快捷条按 `usedAt` 倒序。它们都在 `media-library.ts` 里，与类目数量无关。
+- 旧记录不会被这次改动影响：`isMediaKind()` 是入库与读库共用的白名单，放宽它只影响认得出什么；认不出的 `kind` 照旧丢弃（`media-library.test.ts` 有断言守着）。
+
+### 「能发进对话」是一个共用的判断
+
+表情图片与商品图分两个类目只是为了好找，**用起来是同一件事**——往「图片」消息里塞一张图。所以这条规则收敛成 `imageMessageKinds` / `isImageMessageKind()` 一处：
+
+- `MessageEditor` 的「图片」一栏改为遍历 `imageMessageKinds` 渲染快捷条，加类目时这里自动多一条，不用再写一个 `MediaLibraryStrip`。商品图通常比表情攒得多，快捷条给到 12 格（表情仍是 8 格）。
+- `App` 里两条选图链路（`handlePickFromLibrary` 弹窗选取、`handleLibraryUpload` 弹窗内单张直传）原先是 `kind === 'sticker'` 硬编码，现在都改问 `isImageMessageKind()`，否则在商品图页签里选中的图会被静默忽略。
+- 弹窗的 `onKindChange` 原先「换类目就清掉旧目标」，现在对表情图片与商品图**例外地保留目标**：来回切类目挑图时目标得留着，不然选完就不知道该发给哪条消息。
+
+### 入口与边界
+
+- 素材库弹窗多一个「商品图」页签：批量上传（多选 / 拖拽）、改名、删除、数量与体积统计都与其它三类一致。
+- 「聊天内容 → 添加消息 → 图片」下多一行商品图快捷条，点一张即设为待添加的图片；「上传 / 管理」打开弹窗并停在该页签。
+- 「选择图片」直接上传的散图仍入 `sticker` 类——那是一次性的随手传，不该反过来污染商品图货架；要归到商品图就在弹窗里传。
+- 素材库的入口按钮文案由 `pickLabel` 决定，现在按目标细分：设为头像 / 用作背景 / 换这张（换某条消息的图）/ 用这张（放进待添加的图片）/ 使用。
+
+### 行为变化
+
+- 单测从 201 增至 204：`media-library.test.ts` 新增 3 条（类目标签与量词齐全、商品图独立上限与去重与快捷条、`imageMessageKinds` 判定），原有的容量统计断言改写为覆盖四个类目。
+
+## 2026-09-21 设置记忆（我的偏好）
+
+### 为什么单开一层
+
+用户的原话是「我设置过的音效，选过的屏幕尺寸这些，每次导入新聊天内容不要给我复原，还继续用上次的」。
+翻代码时发现「复原」有两个来源，都不在导入那一步：
+
+1. **音效（节奏、提示音开关、音源、上次选的音效）、屏幕尺寸、视频画面与滚动时长、预览窗口宽度
+   从来就没有被保存过**——它们只是 `App.tsx` 里的 `useState`，刷新页面就回到默认值。
+2. **新建空白对话会把整套样式重置**（`resetEditor` 里 `setSettings(defaultSettings)`），
+   而「新建后导入」正是最常用的流程。
+
+所以做了一份跨项目、跨会话的偏好：`src/lib/workspace-prefs.ts`（纯逻辑）+ `workspace-prefs-store.ts`（落盘）。
+
+### 存储：localStorage，且背景图单独一条
+
+- 设置要在**首屏同步**拿出来。走 IndexedDB 的话每次打开都会先闪一帧产品默认样式（默认灰底、
+  绿色气泡）再跳回你的配色，所以和昵称历史一样用 localStorage + 进程内缓存。
+- **背景图单独存一条**（`...:prefs-background`）：它可能是几百 KB 到几 MB 的 data URL，
+  而其余字段合起来才几百字节。混在一起写的话，拖动颜色选择器每动一下就同步写一次整块字符串；
+  分开之后只有背景真的换了才写它。
+- 写入前先 `workspacePrefsEqual` 比较（**固定字段顺序**再比，不同来源拼出来的对象键序可能不同，
+  直接 stringify 会假报变化、每次渲染都写一遍存储）。
+- 配额满或被禁时只留在内存里，并删掉旧记录，避免下次读回一份过期的设置。
+
+### 语义：内容是「不带样式」的
+
+这是这次改动里唯一需要判断的地方，结论是**样式不再跟着内容走**：
+
+| 动作 | 样式来源 |
+| --- | --- |
+| 刷新页面 / 新建空白对话 / 导入新聊天内容 | 偏好 |
+| 打开已保存的草稿 | 偏好（草稿只换内容，**不再携带样式**） |
+| 套用同款模板链接 | 链接里的样式（显式的「套用」动作），缺的字段用偏好补 |
+
+为什么打开草稿也不能用草稿里存的样式：**旧草稿里存的就是产品默认值**。照它渲染的结果就是
+「一开草稿，我设好的配色字号全回默认」——正是用户抱怨的那个现象。项目快照里仍然照常保存整份
+`settings`（同款分享链接要用它），只是打开草稿时不再读它当样式来源。
+
+唯一跟着内容走的字段是**聊天标题**（`contactName`）：导入时按聊天记录里的角色名生成，
+打开草稿时按那份草稿里存的标题恢复。它被排除在 `StylePrefs` 之外（`stylePrefsFromSettings`
+用 `delete` 拿掉，以后给 `PhoneSettings` 加字段不用回来补一行）。
+
+### 分区写入：两处各自管自己那一半
+
+`patchWorkspacePrefs(patch)` 以当前快照为基准合并，所以两边先后写不会互相覆盖：
+
+- `App.tsx` 的 effect 写 `style` 与 `playback`（它的状态就在那儿）；
+- `WorkspacePanels.tsx` 的尺寸弹层写 `display`（窗口宽度档位与自定义值，状态在组件里）。
+
+### 音效恢复为什么要等音效库就绪
+
+偏好里存不下 `AudioBuffer`，只存了音效库的 id，所以要等 `loadSoundAssets()` 读完才知道那条还在不在，
+之后再 `fetch(dataUrl)` → `decodeAudioData`（上下文此时是 suspended 也没关系，解码与状态无关）。
+`App.tsx` 里用一个 `soundRestored` ref 标记「是否已经尝试过恢复」：**在它变真之前，
+写偏好时不动 `soundIds`**——否则首屏那一次写入会把上次选的音效 id 抹掉。
+
+顺带把「播放条上直接选文件」也接到同一条入库链路（原先那条只作用于当前页面，下次就找不到了）。
+同一段音频传两次仍只留一条，并复用原记录的 id，偏好才指得准。
+
+### 行为变化
+
+- `App.tsx` 里的 `defaultSettings` 字面量删掉了，默认值收敛到 `workspace-prefs.ts` 的
+  `defaultStylePrefs` / `defaultPhoneSettings`（改默认值只改这一处）。
+- 单测从 204 增至 211：新增 `workspace-prefs.test.ts` 7 条（默认值单一来源与不可被污染、
+  标题不进偏好、脏数据逐字段兜底、缺字段互不影响、键序无关的比较、偏好与设置互转）。
+
+
+

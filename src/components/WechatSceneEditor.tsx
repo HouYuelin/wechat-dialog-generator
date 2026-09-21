@@ -10,6 +10,9 @@ import { WechatPhoneChrome } from '@/components/WechatPhoneChrome'
 import { WorkspacePanels } from './WorkspacePanels'
 import { beginExportLog } from '@/lib/export-log'
 import { ScenePreviewFrame } from './ScenePreviewFrame'
+import { NameSuggest } from './NameSuggest'
+import { nameHistoryKey, splitNameText } from '@/lib/name-history'
+import { rememberNameHistory } from '@/lib/name-history-store'
 import './SceneWorkspace.css'
 
 interface FieldDefinition {
@@ -18,6 +21,8 @@ interface FieldDefinition {
   placeholder?: string
   multiline?: boolean
   image?: boolean
+  /** 这一栏是「人的名字」：single 是单个名字，multi 是一串用分隔符隔开的昵称。 */
+  names?: 'single' | 'multi'
 }
 
 const sceneDefinitions: Record<WechatSceneKind, {
@@ -31,7 +36,7 @@ const sceneDefinitions: Record<WechatSceneKind, {
     description: '制作转账结果、收款完成等创作素材。',
     fields: [
       { key: 'avatar', label: '收款方头像', image: true },
-      { key: 'payee', label: '收款方' },
+      { key: 'payee', label: '收款方', names: 'single' },
       { key: 'amount', label: '金额' },
       { key: 'account', label: '对方账户' },
       { key: 'time', label: '转账时间' },
@@ -45,7 +50,7 @@ const sceneDefinitions: Record<WechatSceneKind, {
     description: '制作红包封面和领取结果画面。',
     fields: [
       { key: 'avatar', label: '发送人头像', image: true },
-      { key: 'sender', label: '发送人' },
+      { key: 'sender', label: '发送人', names: 'single' },
       { key: 'greeting', label: '红包祝福' },
       { key: 'amount', label: '领取金额' },
       { key: 'status', label: '领取状态' },
@@ -57,7 +62,7 @@ const sceneDefinitions: Record<WechatSceneKind, {
     description: '制作个人名片和资料页创作素材。',
     fields: [
       { key: 'avatar', label: '头像', image: true },
-      { key: 'nickname', label: '昵称' },
+      { key: 'nickname', label: '昵称', names: 'single' },
       { key: 'wechatId', label: '微信号' },
       { key: 'region', label: '地区' },
       { key: 'signature', label: '个性签名', multiline: true },
@@ -68,9 +73,9 @@ const sceneDefinitions: Record<WechatSceneKind, {
     title: '群信息页面',
     description: '制作群聊资料、公告和成员列表。',
     fields: [
-      { key: 'name', label: '群聊名称' },
+      { key: 'name', label: '群聊名称', names: 'single' },
       { key: 'count', label: '群成员人数' },
-      { key: 'members', label: '成员昵称', placeholder: '使用逗号分隔' },
+      { key: 'members', label: '成员昵称', placeholder: '使用逗号分隔', names: 'multi' },
       { key: 'announcement', label: '群公告', multiline: true },
     ],
     defaults: SCENE_DEFAULT_FIELDS.group,
@@ -113,6 +118,26 @@ export function WechatSceneEditor({ kind, onToast, onBeforeExport, onExportSucce
   const updateField = (key: string, value: string) => {
     setSaved(false)
     setProject(current => ({ ...current, fields: { ...current.fields, [key]: value } }))
+  }
+
+  /** 从「最近用过」里点一个名字：单个名字直接回填，一串昵称的那种追加进去。 */
+  const pickName = (field: FieldDefinition, name: string) => {
+    if (field.names === 'multi') {
+      const current = splitNameText(project.fields[field.key] ?? '')
+      if (!current.some(item => nameHistoryKey(item) === nameHistoryKey(name))) {
+        updateField(field.key, [...current, name].join('，'))
+      }
+    } else {
+      updateField(field.key, name)
+    }
+    rememberNameHistory(name)
+  }
+
+  /** 失焦时把这一栏里的名字收进历史；「成员昵称」这种一格多人的要先拆开。 */
+  const rememberFieldName = (field: FieldDefinition) => {
+    if (!field.names) return
+    const value = project.fields[field.key] ?? ''
+    rememberNameHistory(field.names === 'multi' ? splitNameText(value) : value)
   }
 
   const updateImage = (key: string, file?: File) => {
@@ -174,7 +199,15 @@ export function WechatSceneEditor({ kind, onToast, onBeforeExport, onExportSucce
             </span></label>
           ) : <label className={field.multiline ? "scene-field-wide" : undefined} key={field.key}>{field.label}{field.multiline
             ? <Textarea className="me-textarea" rows={4} value={project.fields[field.key] ?? ''} placeholder={field.placeholder} onChange={event => updateField(field.key, event.target.value)} />
-            : <Input className="me-input" value={project.fields[field.key] ?? ''} placeholder={field.placeholder} onChange={event => updateField(field.key, event.target.value)} />}</label>)}
+            : <Input className="me-input" value={project.fields[field.key] ?? ''} placeholder={field.placeholder} onChange={event => updateField(field.key, event.target.value)} onBlur={() => rememberFieldName(field)} />}
+            {field.names && (
+              <NameSuggest
+                label={field.names === 'multi' ? '最近用过的昵称' : '最近用过'}
+                exclude={field.names === 'multi' ? splitNameText(project.fields[field.key] ?? '') : [project.fields[field.key] ?? '']}
+                onPick={name => pickName(field, name)}
+              />
+            )}
+          </label>)}
           </div>
         </section>
         <div className="scene-safety-note">导出图片固定带有“模拟界面”标识，不用于伪造交易凭证、身份或欺骗他人。</div>
