@@ -1,0 +1,50 @@
+/* 「用过的头像」选择器弹窗。
+   和素材库弹窗同一个理由自带一套变量：弹窗挂在 body 上，拿不到 .studio-app 里的 --studio-*。 */
+.avatar-picker-backdrop { position: fixed; inset: 0; z-index: 1212; background: rgba(15, 32, 22, 0.46); }
+.avatar-picker-popup {
+  --ap-border: #e0e7e2;
+  --ap-fg: #1d3027;
+  --ap-muted: #627068;
+  --ap-primary: #078344;
+  --ap-accent: #eaf7ee;
+  --ap-accent-fg: #086637;
+  position: fixed; z-index: 1213; top: 50%; left: 50%; transform: translate(-50%, -50%);
+  width: min(560px, calc(100vw - 32px)); max-height: min(84vh, 680px); overflow-y: auto;
+  padding: 20px; border-radius: 10px; background: #fff; color: var(--ap-fg);
+  box-shadow: 0 24px 60px rgba(18, 45, 30, 0.22); outline: none;
+  font-family: ui-sans-serif, -apple-system, BlinkMacSystemFont, 'Segoe UI', 'PingFang SC', 'Microsoft YaHei', sans-serif;
+  font-size: 13px;
+}
+.avatar-picker-topline { display: flex; align-items: center; justify-content: space-between; gap: 10px; }
+.avatar-picker-title { display: flex; align-items: center; gap: 7px; margin: 0; font-size: 15px; font-weight: 600; }
+.avatar-picker-title svg { color: var(--ap-primary); flex-shrink: 0; }
+.avatar-picker-description { margin: 6px 0 0; font-size: 12px; line-height: 1.7; color: var(--ap-muted); }
+
+.avatar-picker-toolbar { display: flex; align-items: center; gap: 10px; margin-top: 12px; }
+.avatar-picker-search { flex: 1 1 auto; height: 30px; font-size: 12px; }
+.avatar-picker-count { flex: 0 0 auto; font-size: 11px; color: var(--ap-muted); font-variant-numeric: tabular-nums; }
+
+.avatar-picker-grid {
+  display: grid; grid-template-columns: repeat(auto-fill, minmax(84px, 1fr)); gap: 12px;
+  margin: 14px 0 0; padding: 0; list-style: none;
+}
+.avatar-picker-item { display: flex; flex-direction: column; gap: 4px; min-width: 0; }
+.avatar-picker-thumb {
+  position: relative; display: block; width: 100%; aspect-ratio: 1 / 1; padding: 0;
+  border: 1px solid var(--ap-border); border-radius: 8px; background: #f4f7f5; overflow: hidden; cursor: pointer;
+}
+.avatar-picker-thumb img { width: 100%; height: 100%; object-fit: cover; display: block; }
+.avatar-picker-thumb:hover { border-color: var(--ap-primary); }
+/* 正在用的那一张给个静态标记：鼠标不悬停也知道换不换 */
+.avatar-picker-thumb[data-in-use='true'] { border-color: var(--ap-primary); box-shadow: inset 0 0 0 1px var(--ap-primary); }
+.avatar-picker-badge {
+  position: absolute; inset: auto 0 0 0; display: flex; align-items: center; justify-content: center; gap: 3px;
+  padding: 3px 0; background: rgba(7, 131, 68, 0.86); color: #fff; font-size: 10px; opacity: 0; transition: opacity 0.12s ease;
+}
+.avatar-picker-thumb:hover .avatar-picker-badge,
+.avatar-picker-thumb:focus-visible .avatar-picker-badge,
+.avatar-picker-thumb[data-in-use='true'] .avatar-picker-badge { opacity: 1; }
+.avatar-picker-name { font-size: 11px; line-height: 1.4; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+.avatar-picker-empty { display: grid; place-items: center; gap: 8px; padding: 34px 12px; color: var(--ap-muted); text-align: center; }
+.avatar-picker-empty p { margin: 0; font-size: 12px; line-height: 1.7; max-width: 340px; }
+.avatar-picker-note { margin-top: 16px; padding-top: 12px; border-top: 1px dashed #d9e3dc; font-size: 10px; line-height: 1.7; color: var(--ap-muted); }

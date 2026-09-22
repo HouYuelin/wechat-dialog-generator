@@ -10,6 +10,7 @@ import { ImportPanel } from '@/components/ImportPanel';
 import { UserAvatarManager } from '@/components/UserAvatarManager';
 import { MessageEditor } from '@/components/MessageEditor';
 import { MediaLibraryDialog } from '@/components/MediaLibraryDialog';
+import { AvatarPresetDialog } from '@/components/AvatarPresetDialog';
 import { SoundLibraryDialog } from '@/components/SoundLibraryDialog';
 import { SettingsPanel } from '@/components/SettingsPanel';
 import { PhonePreview } from '@/components/PhonePreview';
@@ -63,7 +64,7 @@ import {
   type OfficialAccountPlacement,
 } from '@/components/OfficialAccountDialog';
 import { appendMessageToRecord, parseChatRecord } from '@/lib/parser';
-import { avatarNameKey, carryOverAvatars, carryOverSelfId, isSelfAlias } from '@/lib/user-avatars';
+import { avatarNameKey, carryOverAvatars, carryOverSelfId, drawAvatars, isSelfAlias, sameRoster } from '@/lib/user-avatars';
 import { rememberNameHistory } from '@/lib/name-history-store';
 import {
   applyPresetsToUsers,
@@ -211,6 +212,8 @@ function App() {
   const [draftImage, setDraftImage] = useState<string | null>(null);
   /** 素材库弹窗这次是为谁打开的：某位角色的头像 / 某条消息的图 / 待发送的草稿 / 某一处背景。 */
   const [libraryPicker, setLibraryPicker] = useState<{ kind: MediaKind; userId?: number; msgId?: number; draft?: boolean; background?: BackgroundTarget } | null>(null);
+  /** 「用过的头像」选择器这次是给哪位角色挑的。和素材库是两回事，所以不复用上面那个 state。 */
+  const [presetPicker, setPresetPicker] = useState<{ userId: number } | null>(null);
   /**
    * 朋友圈编辑器的封面在它自己的草稿里，弹窗却在 App 这边，所以「选一张封面」用一次性的
    * Promise 接：调用方 await 到 data URL，中途关掉弹窗就拿到 null。同一时刻只可能有一个等待者。
@@ -891,6 +894,27 @@ function App() {
     }
   }, [activeProjectName, confirm, importText, messages, selfId, settings, showToast, users]);
 
+  /**
+   * 「我的头像库」：素材库里标为头像的那些，加上「用过的头像」归档里的图，按 dataUrl 去重。
+   *
+   * 两处合起来才是用户真正攒下的东西：归档是自动记的、素材库是上传时顺带存的，
+   * 只认素材库的话，明明攒了一堆头像的人反而抽不出图来；只认归档的话，
+   * 从没配过头像、只在素材库传过图的人同样抽不出来。
+   */
+  const avatarPool = useMemo(() => {
+    const seen = new Set<string>();
+    const pool: string[] = [];
+    for (const url of [
+      ...mediaAssetsOfKind(library, 'avatar').map(asset => asset.dataUrl),
+      ...avatarPresets.map(preset => preset.avatar),
+    ]) {
+      if (seen.has(url)) continue;
+      seen.add(url);
+      pool.push(url);
+    }
+    return pool;
+  }, [avatarPresets, library]);
+
   const handleImport = useCallback(() => {
     if (!importText.trim()) {
       showToast('请先输入聊天记录文本');
@@ -907,8 +931,13 @@ function App() {
     // 上一轮对话里没有的角色（换过草稿、换过聊天记录）再从归档里找一遍，
     // 归档比当前编辑状态活得久，这才是「我用过的头像都还在」的那一层。
     const restored = applyPresetsToUsers(carriedOver, avatarPresets);
-    const nextUsers = restored.users;
-    const carried = nextUsers.filter((user, index) => !result.users[index].avatar && user.avatar).length;
+    // 「沿用」只算到这里为止：随机补的那几张不算沿用，回执里要分开说。
+    const carried = restored.users.filter((user, index) => !result.users[index].avatar && user.avatar).length;
+    // 角色名单变了（换了一段对话）才从头像库里随机补几张；还是原来那几个人就一律保持原样，
+    // 否则每点一次「解析并导入」头像就换一轮，改个错别字都要重认脸。
+    const rosterChanged = !sameRoster(users, result.users);
+    const drawn = rosterChanged ? drawAvatars(restored.users, avatarPool) : { users: restored.users, assigned: 0 };
+    const nextUsers = drawn.users;
     setUsers(nextUsers);
     setMessages(result.messages);
     setSelfId(carryOverSelfId(nextUsers, users, selfId));
@@ -932,13 +961,15 @@ function App() {
     }
     const kept = carried > 0 ? `，已沿用 ${carried} 个头像` : '';
     const fromArchive = restored.applied > 0 ? `，其中 ${restored.applied} 个来自用过的头像` : '';
+    // 换了对话才随机补的那几张得说清来源，否则用户只会觉得头像「凭空变了」。
+    const drawnText = drawn.assigned > 0 ? `，已从头像库随机补上 ${drawn.assigned} 个` : '';
     // 有行没能进对话就必须说出来。以前「只写了名字没写内容」的行是静默丢掉的，
     // 回执照样显示「导入成功」，用户看到的就是「明明加了一条，怎么没有」。
     const dropped = result.skipped.length
       ? `；第 ${result.skipped.map(item => item.line).join('、')} 行只写了名字没写内容，已跳过`
       : '';
-    showToast(`成功导入 ${result.messages.length} 条消息（${result.users.length} 个用户）${kept}${fromArchive}${dropped}`);
-  }, [avatarPresets, importText, selfId, showToast, users]);
+    showToast(`成功导入 ${result.messages.length} 条消息（${result.users.length} 个用户）${kept}${fromArchive}${drawnText}${dropped}`);
+  }, [avatarPool, avatarPresets, importText, selfId, showToast, users]);
 
   const handleUpdateAvatar = useCallback((userId: number, avatar: string) => {
     setUsers(prev => prev.map(u => u.id === userId ? { ...u, avatar } : u));
@@ -971,6 +1002,25 @@ function App() {
     touchPreset(preset);
     setUsers(prev => prev.map(user => user.id === owner.id ? { ...user, avatar: preset.avatar } : user));
     showToast(`已为「${owner.name}」换上这张头像。`);
+  }, [showToast, touchPreset, users]);
+
+  /**
+   * 把归档里的某一张换给**指定**的那一位，不要求同名。
+   *
+   * 和上面那条的区别：上面是「还给同名的角色」，只有当前对话里正好有同名角色时才给按钮；
+   * 这条来自那位角色卡片上的「用过的」，已经明确了给谁，归档里任何一张都能换过去。
+   * 换上之后这个名字与这张头像的新组合会被归档记一条（只增不删），下次还能选回来。
+   */
+  const handleUsePresetFor = useCallback((userId: number, preset: AvatarPreset) => {
+    const owner = users.find(user => user.id === userId);
+    if (!owner) {
+      showToast('这位角色已经不在对话里了。');
+      return;
+    }
+    touchPreset(preset);
+    setUsers(prev => prev.map(user => user.id === userId ? { ...user, avatar: preset.avatar } : user));
+    setPresetPicker(null);
+    showToast(`已把「${preset.name}」这张头像换给「${owner.name}」。`);
   }, [showToast, touchPreset, users]);
 
   const handleRemovePreset = useCallback((preset: AvatarPreset) => {
@@ -1835,6 +1885,7 @@ function App() {
                   libraryEnabled={libraryReady}
                   avatarPresets={avatarPresets}
                   presetsEnabled={presetsReady}
+                  onOpenPresets={userId => setPresetPicker({ userId })}
                   onUsePreset={handleUsePreset}
                   onRenamePreset={handleRenamePreset}
                   onRemovePreset={handleRemovePreset}
@@ -1956,6 +2007,14 @@ function App() {
         onUpload={handleSoundLibraryUpload}
         onRemove={handleRemoveSound}
         onRename={handleRenameSound}
+      />
+      <AvatarPresetDialog
+        open={presetPicker !== null}
+        onOpenChange={open => { if (!open) setPresetPicker(null) }}
+        presets={avatarPresets}
+        targetName={users.find(user => user.id === presetPicker?.userId)?.name}
+        currentAvatar={users.find(user => user.id === presetPicker?.userId)?.avatar ?? null}
+        onPick={preset => { if (presetPicker) handleUsePresetFor(presetPicker.userId, preset); }}
       />
       {videoProgress && <VideoProgressOverlay
         stage={videoProgress.stage}

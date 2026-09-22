@@ -7,6 +7,7 @@ import { Input } from './ui/input'
 import { Progress } from './ui/progress'
 import { SelectField } from './ui/select'
 import { Textarea } from './ui/textarea'
+import { AvatarPresetDialog } from './AvatarPresetDialog'
 import { MediaLibraryDialog } from './MediaLibraryDialog'
 import { NameSuggest } from './NameSuggest'
 import { PhonePreview } from './PhonePreview'
@@ -104,6 +105,8 @@ export function BatchStudio({
   const [view, setView] = useState<'import' | 'edit'>('import')
   const [editSection, setEditSection] = useState<'content' | 'people' | 'settings'>('content')
   const [picker, setPicker] = useState<LibraryTarget | null>(null)
+  /** 「用过的头像」选择器这次是给哪一组的哪位角色挑的。 */
+  const [presetPicker, setPresetPicker] = useState<{ jobId: string; userId: number } | null>(null)
   // 导出内容（聊天图 / 聊天视频）是整批的开关，记进「我的偏好」：刷新、重新导入都还是上次那个。
   const [output, setOutput] = useState<BatchOutput>(() => getWorkspacePrefs().playback.batchOutput)
   const [videoOpen, setVideoOpen] = useState(false)
@@ -254,6 +257,18 @@ export function BatchStudio({
     if (!owner) { setMessage(`本组里没有「${preset.name}」这个角色，这张头像先留在用过的头像里。`); return }
     onTouchPreset?.(preset)
     setJobAvatar(jobId, owner.id, preset.avatar)
+  }
+
+  /**
+   * 把「用过的头像」里的一张换给**指定**的那位角色（不要求同名）。
+   * 聊天页那边同理：卡片上的「用过的」已经明确了给谁，归档里任何一张都能换过去。
+   */
+  function applyPresetToJobUser(jobId: string, userId: number, preset: AvatarPreset) {
+    onTouchPreset?.(preset)
+    setJobAvatar(jobId, userId, preset.avatar)
+    setPresetPicker(null)
+    const name = jobs.find(j => j.id === jobId)?.snapshot?.users.find(user => user.id === userId)?.name
+    setMessage(`已把「${preset.name}」这张头像换给「${name ?? '这位角色'}」。`)
   }
 
   function applyBackgroundToJob(jobId: string, asset: MediaAsset) {
@@ -520,7 +535,7 @@ export function BatchStudio({
             {(active.content.body || active.dirty) && <><label>本组聊天记录<Textarea className="batch-field-control" aria-label="本组聊天记录" rows={8} maxLength={10000} disabled={locked} ref={bodyInputRef} value={active.content.body} onChange={e => patchJobBody(e.target.value)} /></label><EmojiPicker target={bodyInputRef} onInsert={patchJobBody} disabled={locked} /><Button variant="outline" disabled={locked} onClick={applySource}>更新本组预览</Button></>}
             {!active.content.body && !active.dirty && <><div className="batch-message-edit" aria-label="本组已有文字消息">{active.snapshot.messages.filter(m => m.type === 'text' || m.type === 'time').map(m => <label key={m.id}>{active.snapshot!.users.find(u => u.id === m.senderId)?.name || '时间'}<Textarea className="batch-field-control" rows={2} aria-label={`消息 ${m.id}`} disabled={locked} value={m.content} onFocus={event => { messageInputRef.current = event.currentTarget; setFocusedMessageId(m.id) }} onChange={e => patchMessageContent(m.id, e.target.value)} /></label>)}</div>{!locked && <EmojiPicker target={messageInputRef} onInsert={value => { if (focusedMessageId !== null) patchMessageContent(focusedMessageId, value) }} />}</>}
               </TabsContent>
-              <TabsContent value="people" keepMounted><fieldset disabled={locked} className="batch-shared-controls"><UserAvatarManager users={active.snapshot.users} selfId={active.snapshot.selfId} onUpdateAvatar={(id, avatar) => { if (!locked) updateJob(active.id, { snapshot: { ...active.snapshot!, users: active.snapshot!.users.map(u => u.id === id ? { ...u, avatar } : u) } }) }} onRemoveAvatar={id => { if (!locked) updateJob(active.id, { snapshot: { ...active.snapshot!, users: active.snapshot!.users.map(u => u.id === id ? { ...u, avatar: null } : u) } }) }} onSetSelf={selfId => { if (!locked) updateJob(active.id, { snapshot: { ...active.snapshot!, selfId } }) }} onUploadAvatar={(id, file) => { void batchUploadOneAvatar(active.id, id, file) }} onBatchUpload={files => { void batchUploadAvatars(active.id, files) }} onOpenLibrary={userId => setPicker({ kind: 'avatar', jobId: active.id, userId })} onManageLibrary={() => setPicker({ kind: 'avatar', jobId: active.id })} libraryAvatarCount={mediaAssetsOfKind(mediaAssets, 'avatar').length} libraryEnabled={libraryReady} avatarPresets={avatarPresets} presetsEnabled={presetsReady} onUsePreset={preset => applyPresetToJob(active.id, preset)} onRenamePreset={onRenamePreset} onRemovePreset={onRemovePreset} /></fieldset></TabsContent>
+              <TabsContent value="people" keepMounted><fieldset disabled={locked} className="batch-shared-controls"><UserAvatarManager users={active.snapshot.users} selfId={active.snapshot.selfId} onUpdateAvatar={(id, avatar) => { if (!locked) updateJob(active.id, { snapshot: { ...active.snapshot!, users: active.snapshot!.users.map(u => u.id === id ? { ...u, avatar } : u) } }) }} onRemoveAvatar={id => { if (!locked) updateJob(active.id, { snapshot: { ...active.snapshot!, users: active.snapshot!.users.map(u => u.id === id ? { ...u, avatar: null } : u) } }) }} onSetSelf={selfId => { if (!locked) updateJob(active.id, { snapshot: { ...active.snapshot!, selfId } }) }} onUploadAvatar={(id, file) => { void batchUploadOneAvatar(active.id, id, file) }} onBatchUpload={files => { void batchUploadAvatars(active.id, files) }} onOpenLibrary={userId => setPicker({ kind: 'avatar', jobId: active.id, userId })} onManageLibrary={() => setPicker({ kind: 'avatar', jobId: active.id })} libraryAvatarCount={mediaAssetsOfKind(mediaAssets, 'avatar').length} libraryEnabled={libraryReady} avatarPresets={avatarPresets} presetsEnabled={presetsReady} onOpenPresets={userId => setPresetPicker({ jobId: active.id, userId })} onUsePreset={preset => applyPresetToJob(active.id, preset)} onRenamePreset={onRenamePreset} onRemovePreset={onRemovePreset} /></fieldset></TabsContent>
               <TabsContent value="settings" keepMounted><fieldset disabled={locked} className="batch-shared-controls"><SettingsPanel disabled={locked} settings={active.snapshot.settings} onSettingsChange={settings => { if (!locked) updateJob(active.id, { content: { ...active.content, title: settings.contactName }, snapshot: { ...active.snapshot!, settings } }) }} onUploadBackground={uploadBackgroundForJob(active.id)} onOpenBackgroundLibrary={libraryReady ? () => setPicker({ kind: 'background', jobId: active.id, background: true }) : undefined} backgroundAssets={mediaAssetsOfKind(mediaAssets, 'background')} onBackgroundUsed={asset => applyBackgroundToJob(active.id, asset)} libraryEnabled={libraryReady} /></fieldset></TabsContent>
             </Tabs>
           </div>}
@@ -549,6 +564,14 @@ export function BatchStudio({
           : picker?.msgId !== undefined
             ? '点一张即可换到本组这条消息上；表情图片与商品图都能用。'
             : '上传过的头像、表情、背景图和商品图都会留在这里，下次直接点选即可，不用再翻本地文件。'}
+    />
+    <AvatarPresetDialog
+      open={presetPicker !== null}
+      onOpenChange={open => { if (!open) setPresetPicker(null) }}
+      presets={avatarPresets}
+      targetName={jobs.find(j => j.id === presetPicker?.jobId)?.snapshot?.users.find(user => user.id === presetPicker?.userId)?.name}
+      currentAvatar={jobs.find(j => j.id === presetPicker?.jobId)?.snapshot?.users.find(user => user.id === presetPicker?.userId)?.avatar ?? null}
+      onPick={preset => { if (presetPicker) applyPresetToJobUser(presetPicker.jobId, presetPicker.userId, preset) }}
     />
     {video && <VideoExportDialog
       open={videoOpen}

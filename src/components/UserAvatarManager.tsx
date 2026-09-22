@@ -29,6 +29,8 @@ interface UserAvatarManagerProps {
   avatarPresets?: AvatarPreset[];
   /** 归档读出来了才放出这一段的入口。 */
   presetsEnabled?: boolean;
+  /** 打开「用过的头像」选择器，给这一位换一张归档里的图。 */
+  onOpenPresets?: (userId: number) => void;
   /** 把归档里的这张头像还给同名的角色。 */
   onUsePreset?: (preset: AvatarPreset) => void;
   /** 给归档里的某一条改名字。返回 false 表示没改成（外层已经提示过原因），输入框留在原地让用户接着改。 */
@@ -37,7 +39,7 @@ interface UserAvatarManagerProps {
   onRemovePreset?: (preset: AvatarPreset) => void;
 }
 
-function AvatarCard({ user, index, isSelf, onUpdateAvatar, onRemoveAvatar, onSetSelf, onUploadAvatar, onOpenLibrary }: {
+function AvatarCard({ user, index, isSelf, onUpdateAvatar, onRemoveAvatar, onSetSelf, onUploadAvatar, onOpenLibrary, onOpenPresets }: {
   user: ChatUser;
   index: number;
   isSelf: boolean;
@@ -46,6 +48,7 @@ function AvatarCard({ user, index, isSelf, onUpdateAvatar, onRemoveAvatar, onSet
   onSetSelf: (userId: number) => void;
   onUploadAvatar?: (userId: number, file: File) => void;
   onOpenLibrary?: (userId: number) => void;
+  onOpenPresets?: (userId: number) => void;
 }) {
   const fileRef = useRef<HTMLInputElement>(null);
   const avatarSrc = user.avatar || getDefaultAvatar(index);
@@ -86,6 +89,11 @@ function AvatarCard({ user, index, isSelf, onUpdateAvatar, onRemoveAvatar, onSet
             <Images size={12} /> 素材库
           </Button>
         )}
+        {onOpenPresets && (
+          <Button variant="outline" size="sm" type="button" className="avatar-mini-btn" aria-label={`从用过的头像里给${user.name}选一张`} title="从用过的头像里选" onClick={() => onOpenPresets(user.id)}>
+            <History size={12} /> 用过的
+          </Button>
+        )}
         {isSelf
           ? <span className="avatar-tag">自己</span>
           : <Button variant="outline" size="sm" type="button" className="avatar-mini-btn" onClick={() => onSetSelf(user.id)}><UserCheck size={12} /> 设为自己</Button>
@@ -98,7 +106,7 @@ function AvatarCard({ user, index, isSelf, onUpdateAvatar, onRemoveAvatar, onSet
 export function UserAvatarManager({
   users, selfId, onUpdateAvatar, onRemoveAvatar, onSetSelf,
   onUploadAvatar, onBatchUpload, onOpenLibrary, onManageLibrary, libraryAvatarCount = 0, libraryEnabled = false,
-  avatarPresets = [], presetsEnabled = false, onUsePreset, onRenamePreset, onRemovePreset,
+  avatarPresets = [], presetsEnabled = false, onOpenPresets, onUsePreset, onRenamePreset, onRemovePreset,
 }: UserAvatarManagerProps) {
   const batchRef = useRef<HTMLInputElement>(null);
   // 改名用的是行内输入框，正在改哪一条、草稿是什么都放在这里；换一条点就是换一个 id。
@@ -116,6 +124,10 @@ export function UserAvatarManager({
     }
   };
 
+  // 卡片上的两个入口分工不同：素材库给「我上传过的图」，用过的头像给「我给角色配过的脸」。
+  // 归档还空着就没有第二个入口可给（点开也是一个空列表），所以跟这一节一起隐藏。
+  const showPresetEntry = presetsEnabled && avatarPresets.length > 0;
+
   return (
     <div className="s-card">
       <div className="s-card-header">
@@ -123,7 +135,7 @@ export function UserAvatarManager({
         <span className="s-card-badge">{users.length} 个用户</span>
       </div>
       <div className="s-card-body">
-        <p style={{ fontSize: 12, color: 'var(--control-muted)', marginBottom: 14 }}>点击头像可上传自定义图片；上传过的都会留在素材库，用过的头像还会按角色名单独存一份，换对话也不会丢。</p>
+        <p style={{ fontSize: 12, color: 'var(--control-muted)', marginBottom: 14 }}>点击头像可上传自定义图片；上传过的都会留在素材库，用过的头像还会按角色名单独存一份，换对话也不会丢。每位角色的卡片上可以直接「从素材库选」或「从用过的头像里选」。</p>
         {(onBatchUpload || (libraryEnabled && onManageLibrary)) && (
           <div className="avatar-toolbar">
             <input
@@ -158,14 +170,15 @@ export function UserAvatarManager({
               onSetSelf={onSetSelf}
               onUploadAvatar={onUploadAvatar}
               onOpenLibrary={libraryEnabled ? onOpenLibrary : undefined}
+              onOpenPresets={showPresetEntry ? onOpenPresets : undefined}
             />
           ))}
         </div>
       </div>
-      {presetsEnabled && avatarPresets.length > 0 && <div className="avatar-preset-section">
+      {showPresetEntry && <div className="avatar-preset-section">
         <div className="avatar-preset-head">
           <h3><History size={15} /> 用过的头像<span className="avatar-preset-count">{avatarPresets.length}</span></h3>
-          <small>按角色名长期保留：换对话、重新导入、清空编辑器都不会自动清掉，重新导入时同名的角色还会自动对回来。可以在每一条上改名或删除。</small>
+          <small>按角色名长期保留：换对话、重新导入、清空编辑器都不会自动清掉，重新导入时同名的角色还会自动对回来。可以在每一条上改名或删除；想把某一张换给别的角色，用那一位卡片上的「用过的」。</small>
         </div>
         <ul className="avatar-preset-list">
           {avatarPresets.map(preset => {
@@ -200,7 +213,7 @@ export function UserAvatarManager({
                   title={`把这张头像还给「${owner.name}」`}
                   onClick={() => onUsePreset(preset)}
                 ><RotateCcw size={12} /> {inUse ? '已用' : '用上'}</Button>
-                : <span className="avatar-preset-tag" title="当前对话里没有这个角色，这张头像先留在归档里">仅保存</span>}
+                : <span className="avatar-preset-tag" title={onOpenPresets ? '当前对话里没有这个角色，可用任意一位卡片上的「用过的」把它换给谁' : '当前对话里没有这个角色，这张头像先留在归档里'}>仅保存</span>}
               {onRenamePreset && <Button
                 variant="ghost"
                 size="icon"
